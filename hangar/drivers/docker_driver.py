@@ -1,11 +1,15 @@
 """Driver Docker con el SDK oficial."""
 from __future__ import annotations
 
+import functools
 import io
 import ipaddress
 import json
+import os
 import re
 import shlex
+import shutil
+import subprocess
 import tarfile
 
 import docker
@@ -15,6 +19,58 @@ from .base import (DeletePlan, Driver, DriverError, Field, Interface, Machine, U
                    human_bytes, parse_ip_request, parse_number, parse_passwd)
 
 IMAGE_RE = re.compile(r"^[a-z0-9]+([._/:@-][A-Za-z0-9_.-]+)*$")
+DEFAULT_SOCKET = "unix:///var/run/docker.sock"
+
+
+@functools.cache
+def _context_host() -> str | None:
+    """Socket del contexto activo del comando docker, si no es el normal.
+
+    Con Docker Desktop o Docker rootless el comando `docker` usa un contexto
+    (p. ej. ~/.docker/desktop/docker.sock), pero la librería de Python solo
+    mira DOCKER_HOST y /var/run/docker.sock: sin esto, docker funciona en la
+    terminal y Hangar no conecta."""
+    if os.environ.get("DOCKER_HOST") or not shutil.which("docker"):
+        return None
+    try:
+        out = subprocess.run(["docker", "context", "inspect", "--format",
+                              "{{.Endpoints.docker.Host}}"],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    host = out.stdout.strip()
+    return host if out.returncode == 0 and host and host != DEFAULT_SOCKET else None
+
+
+def _explain(error: Exception, host: str) -> str:
+    """Convierte el error de la librería en el motivo y la solución."""
+    text = str(error)
+    socket_path = host.removeprefix("unix://")
+    fix_service = "Arranca el servicio: sudo systemctl enable --now docker"
+    if not shutil.which("docker") and not os.path.exists(socket_path):
+        reason = ("Docker no está instalado en este equipo (Hangar funciona igual con KVM "
+                  "y LXC). Para usarlo: sudo apt install docker.io")
+    elif "Permission denied" in text:
+        reason = ("tu usuario no tiene permiso para usar Docker. Añádelo al grupo con "
+                  "«sudo usermod -aG docker $USER», cierra sesión y vuelve a entrar (o "
+                  "reinicia) y arranca Hangar otra vez.")
+    elif "No such file" in text or "FileNotFoundError" in text:
+        reason = f"no existe el socket {socket_path}: el servicio no está arrancado. {fix_service}"
+    elif "Connection refused" in text:
+        reason = f"el servicio no responde en {socket_path}. {fix_service}"
+    else:
+        return f"No se puede conectar a Docker ({host}): {text}"
+    return f"No se puede conectar a Docker: {reason}"
+
+
+def docker_client() -> docker.DockerClient:
+    host = _context_host()
+    try:
+        return docker.DockerClient(base_url=host) if host else docker.from_env()
+    except DockerException as e:
+        raise DriverError(_explain(e, host or os.environ.get("DOCKER_HOST", DEFAULT_SOCKET))) from e
+
+
 BUILTIN_NETWORKS = {"bridge", "host", "none"}   # las de Docker, sin IP fija
 ANON_VOLUME_RE = re.compile(r"^[0-9a-f]{64}$")   # Docker nombra así a los anónimos
 PORT_RE = re.compile(r"^(?:(\d{1,3}(?:\.\d{1,3}){3}):)?(\d{1,5}):(\d{1,5})(?:/(tcp|udp))?$")
@@ -34,10 +90,7 @@ class DockerDriver(Driver):
                            "y los datos que quieras conservar deben ir en volúmenes.")
 
     def _client(self) -> docker.DockerClient:
-        try:
-            return docker.from_env()
-        except DockerException as e:
-            raise DriverError(f"No se puede conectar a Docker: {e}") from e
+        return docker_client()
 
     def _container(self, client, machine_id: str):
         try:

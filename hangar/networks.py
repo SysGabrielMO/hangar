@@ -17,6 +17,7 @@ from fastapi.responses import RedirectResponse
 from .common import list_all, templates
 from .drivers import DRIVERS, DriverError
 from .drivers.base import host_bridges
+from .drivers.docker_driver import docker_client
 
 router = APIRouter()
 URI = "qemu:///system"
@@ -92,13 +93,13 @@ def collect():
     except libvirt.libvirtError as e:
         errors.append(f"libvirt: {e}")
     try:
-        client = docker.from_env()
+        client = docker_client()
         try:
             docker_nets = _docker_networks(client)
         finally:
             client.close()
-    except DockerException as e:
-        errors.append(f"Docker: {e}")
+    except (DockerException, DriverError) as e:
+        errors.append(str(e) if isinstance(e, DriverError) else f"Docker: {e}")
 
     by_name = {n.name: n for n in libvirt_nets}
     by_bridge = {n.bridge: n for n in libvirt_nets if n.bridge}
@@ -232,7 +233,7 @@ def create_docker(name: str = Form(""), subnet: str = Form("")):
             _check_overlap(net, name)
             ipam = docker.types.IPAMConfig(pool_configs=[docker.types.IPAMPool(
                 subnet=str(net), gateway=str(next(net.hosts())))])
-        client = docker.from_env()
+        client = docker_client()
         try:
             client.networks.create(name, driver="bridge", ipam=ipam)
         finally:
@@ -249,7 +250,7 @@ def delete_docker(name: str):
     try:
         if name in ("bridge", "host", "none"):
             raise DriverError("Las redes propias de Docker no se borran.")
-        client = docker.from_env()
+        client = docker_client()
         try:
             net = client.networks.get(name)
             if net.attrs.get("Containers"):

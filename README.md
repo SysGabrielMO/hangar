@@ -124,6 +124,30 @@ Hangar se pierde el registro, no la máquina).
   de linuxcontainers.org.
 - **Docker**: si la imagen no está, se descarga antes de crear.
 
+## Problemas frecuentes
+
+**«No se puede conectar a Docker»**: Hangar indica la causa en el mensaje.
+
+- *Tu usuario no tiene permiso*: añádelo al grupo `docker` y **cierra sesión
+  y vuelve a entrar** (o reinicia); si no, el grupo no se aplica.
+
+  ```bash
+  sudo usermod -aG docker $USER
+  ```
+- *El servicio no está arrancado*: `sudo systemctl enable --now docker`
+- *Docker no está instalado*: Hangar funciona igual con KVM y LXC; para
+  usarlo, `sudo apt install docker.io`.
+- Con **Docker Desktop** o **Docker rootless**, Hangar usa el mismo contexto
+  que el comando `docker` (`docker context show`), así que no hay que
+  configurar nada.
+
+**«No se puede conectar a qemu:///system»**: instala libvirt
+(`sudo apt install libvirt-daemon-system`) y añade tu usuario al grupo
+`libvirt` (`sudo usermod -aG libvirt $USER`, y vuelve a iniciar sesión).
+
+**«address already in use»**: ya hay un Hangar en marcha en el puerto 8090;
+úsalo, páralo o arranca otro con `PORT=8091 ./run.sh`.
+
 ## API
 
 - `GET /api/machines`: todas las máquinas con sus metadatos
