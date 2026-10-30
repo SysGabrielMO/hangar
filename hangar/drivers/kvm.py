@@ -134,6 +134,48 @@ ip -4 addr show dev "$IF" | sed -n 's/^ *inet /IP actual: /p'
 """
 
 
+# Se ejecuta como root dentro de la VM para que haya un login en el puerto
+# serie (lo que muestra la consola web) y, con GRUB, también los mensajes de
+# arranque.
+GUEST_ENABLE_SERIAL = r"""
+set -e
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl enable --now serial-getty@ttyS0.service
+    echo "Login activado en ttyS0 (serial-getty@ttyS0, también tras reiniciar)."
+elif [ -f /etc/inittab ]; then
+    if grep -q '^[^#]*ttyS0' /etc/inittab; then
+        echo "/etc/inittab ya tenía un login en ttyS0."
+    elif grep -q '^[^#:]*::' /etc/inittab; then
+        # Formato de BusyBox (Alpine)
+        echo 'ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100' >> /etc/inittab
+        echo "Login añadido a /etc/inittab."
+    else
+        echo 'T0:23:respawn:/sbin/getty -L ttyS0 115200 vt100' >> /etc/inittab
+        echo "Login añadido a /etc/inittab."
+    fi
+    kill -HUP 1
+else
+    echo "No se reconoce el sistema de arranque (ni systemd ni /etc/inittab)."
+    exit 1
+fi
+
+if [ -f /etc/default/grub ] && ! grep -q 'console=ttyS0' /etc/default/grub; then
+    if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub; then
+        cp /etc/default/grub /etc/default/grub.hangar.bak
+        sed -i -e 's/^GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 console=tty0 console=ttyS0,115200n8"/' \
+               -e 's/^GRUB_CMDLINE_LINUX=" /GRUB_CMDLINE_LINUX="/' /etc/default/grub
+        if command -v update-grub >/dev/null 2>&1; then
+            update-grub >/dev/null 2>&1
+        elif command -v grub2-mkconfig >/dev/null 2>&1; then
+            grub2-mkconfig -o /boot/grub2/grub.cfg >/dev/null 2>&1
+        fi
+        echo "GRUB: los mensajes de arranque saldrán también por el puerto serie desde el"
+        echo "próximo reinicio (copia del original en /etc/default/grub.hangar.bak)."
+    fi
+fi
+"""
+
+
 def _parse_keep_ns(xml: str) -> ET.Element:
     """Parsea registrando los prefijos (libosinfo:, qemu:…) para que
     ET.tostring los conserve en vez de escribir ns0:, ns1:…"""
@@ -546,8 +588,8 @@ class KvmDriver(Driver):
     # --- Consola y pantalla ----------------------------------------------
 
     console_hint = ("Consola serie de la VM. Si no ves nada, pulsa Enter. Si sigue en negro, "
-                    "el sistema no tiene un login en el puerto serie: usa «Pantalla» o activa "
-                    "serial-getty@ttyS0 dentro de la VM.")
+                    "el sistema no tiene un login en el puerto serie: pulsa «Activar consola serie» "
+                    "(o usa «Pantalla»).")
 
     def console_command(self, machine_id: str) -> list[str]:
         conn = self._conn()
@@ -556,6 +598,36 @@ class KvmDriver(Driver):
             if not dom.isActive():
                 raise DriverError("Arranca la VM para abrir su consola.")
             return ["virsh", "-c", self.uri, "console", dom.UUIDString(), "--force"]
+        finally:
+            conn.close()
+
+    can_enable_serial = True
+
+    def enable_serial_console(self, machine_id: str, log) -> None:
+        conn = self._conn()
+        try:
+            dom = self._domain(conn, machine_id)
+            if not dom.isActive():
+                raise DriverError("Arranca la VM: se activa desde dentro con qemu-guest-agent.")
+            root = ET.fromstring(dom.XMLDesc())
+            if root.find("devices/serial") is None:
+                raise DriverError("La VM no tiene puerto serie. Añádelo con virt-manager "
+                                  "(Añadir hardware → Serie) y reiníciala.")
+            if not self._has_agent(root):
+                raise DriverError("La VM no tiene qemu-guest-agent: entra por «Pantalla» y "
+                                  "ejecuta systemctl enable --now serial-getty@ttyS0")
+            try:
+                os_id = self._agent(dom, "guest-get-osinfo").get("id", "")
+            except DriverError:
+                os_id = ""
+            if os_id == "mswindows":
+                raise DriverError("En Windows la consola serie no da un login: usa «Pantalla».")
+            log("Activando el login en el puerto serie dentro de la VM…")
+            code, out = self._guest_exec(dom, "/bin/sh", ["-c", GUEST_ENABLE_SERIAL])
+            log(out.strip())
+            if code != 0:
+                raise DriverError(f"No se pudo activar (código {code}).")
+            log("Listo: vuelve a la consola y pulsa Enter.")
         finally:
             conn.close()
 

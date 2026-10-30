@@ -13,10 +13,14 @@ import struct
 import subprocess
 import termios
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, HTTPException, Request, WebSocket
+from fastapi.responses import RedirectResponse
 from starlette.websockets import WebSocketDisconnect
 
-from .common import back, driver_or_404, host_allowed, templates
+from . import jobs
+from .common import back, driver_or_404, host_allowed, machine_name, templates
 from .drivers import DRIVERS, DriverError
 
 router = APIRouter()
@@ -32,6 +36,19 @@ def console_page(request: Request, kind: str, machine_id: str):
     return templates.TemplateResponse(request, "console.html", {
         "m": machine, "driver": driver, "hint": driver.console_hint,
     })
+
+
+@router.post("/m/{kind}/{machine_id}/serial")
+def enable_serial(kind: str, machine_id: str):
+    driver = driver_or_404(kind)
+
+    def work(log):
+        driver.enable_serial_console(machine_id, log)
+        return machine_id
+
+    job = jobs.submit(kind, f"Activar consola serie de {machine_name(driver, machine_id)}",
+                      work, link=f"/m/{kind}/{quote(machine_id)}/console")
+    return RedirectResponse(f"/jobs/{job.id}", status_code=303)
 
 
 @router.post("/m/{kind}/{machine_id}/display")

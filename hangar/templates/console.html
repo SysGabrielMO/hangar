@@ -13,6 +13,7 @@
                    background: #171b21; border-bottom: 1px solid #2a3039; font-size: 14px; }
     .console-bar a { color: #8bb4ff; }
     .console-bar .hint { color: #8b939e; font-size: 13px; }
+    .console-bar .btn { background: #232933; color: #e6e8eb; border-color: #2a3039; }
     .console-bar .status { margin-left: auto; color: #8b939e; font-size: 13px; }
     #terminal { flex: 1; min-height: 0; padding: 6px 0 0 8px; }
   </style>
@@ -23,6 +24,12 @@
     <span class="badge {{ m.kind }}">{{ driver.label }}</span>
     <span class="hint">{{ hint }}</span>
     <span class="status" id="status">Conectando…</span>
+    {% if driver.can_enable_serial %}
+    <form method="post" action="/m/{{ m.kind }}/{{ m.id | urlencode }}/serial"
+          title="Activa un login en el puerto serie desde dentro de la VM (necesita qemu-guest-agent)">
+      <button class="btn small">Activar consola serie</button>
+    </form>
+    {% endif %}
     <a href="/m/{{ m.kind }}/{{ m.id | urlencode }}">Ficha</a>
   </div>
   <div id="terminal"></div>

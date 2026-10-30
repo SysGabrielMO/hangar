@@ -153,6 +153,12 @@ class Driver:
     def open_display(self, machine_id: str) -> None:
         raise DriverError("Esta máquina no tiene pantalla gráfica.")
 
+    # Si es True, la página de consola ofrece «Activar consola serie»
+    can_enable_serial: bool = False
+
+    def enable_serial_console(self, machine_id: str, log) -> None:
+        raise DriverError("No disponible para este tipo de máquina.")
+
     def interfaces(self, machine_id: str) -> list[Interface]:
         raise NotImplementedError
 
