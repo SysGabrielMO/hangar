@@ -1,0 +1,207 @@
+#!/bin/bash
+# Ayudante de Hangar para LXC. Se ejecuta como root vía sudo, así que solo
+# acepta un conjunto cerrado de acciones y valida el nombre del contenedor.
+#
+#   hangar-lxc-helper dump [NOMBRE]          info + config (de uno o de todos)
+#   hangar-lxc-helper passwd NOMBRE          /etc/passwd del contenedor
+#   hangar-lxc-helper start|stop|kill|restart|destroy NOMBRE
+#   hangar-lxc-helper set NOMBRE CLAVE [VALOR]   cambia (o quita) una clave del config
+#   hangar-lxc-helper create NOMBRE DISTRO VERSION ARCH   plantilla download
+#   hangar-lxc-helper attach NOMBRE                      shell dentro (consola web)
+#   hangar-lxc-helper net-add NOMBRE BRIDGE | net-del NOMBRE N
+#   hangar-lxc-helper snap-list NOMBRE                   snapN|fecha|comentario
+#   hangar-lxc-helper snap-create NOMBRE [COMENTARIO]
+#   hangar-lxc-helper snap-restore|snap-delete NOMBRE snapN
+set -euo pipefail
+
+# HANGAR_LXCPATH solo se respeta sin root (para pruebas); sudo además limpia el entorno.
+if [[ $EUID -ne 0 && -n "${HANGAR_LXCPATH:-}" ]]; then
+    LXCPATH=$HANGAR_LXCPATH
+else
+    LXCPATH=$(lxc-config lxc.lxcpath)
+fi
+
+die() { echo "$*" >&2; exit 1; }
+
+check_name() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "Nombre no válido: $1"
+    [[ -f "$LXCPATH/$1/config" ]] || die "No existe el contenedor: $1"
+}
+
+state() { lxc-info -P "$LXCPATH" -n "$1" -sH 2>/dev/null || echo UNKNOWN; }
+
+dump_one() {
+    echo "==> $1"
+    lxc-info -P "$LXCPATH" -n "$1" 2>&1 || true
+    echo "--- config"
+    cat "$LXCPATH/$1/config"
+}
+
+# Claves que se pueden cambiar y el formato que debe tener su valor
+declare -A ALLOWED=(
+    [lxc.cgroup2.cpuset.cpus]='^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$'
+    [lxc.cgroup2.memory.max]='^[0-9]+[KMG]?$'
+    [lxc.start.auto]='^[01]$'
+)
+# Claves de red, para cualquier interfaz lxc.net.N
+IFNAME_RE='^[A-Za-z0-9_.-]{1,15}$'
+IPV4_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+declare -A NET_ALLOWED=(
+    [link]="$IFNAME_RE"
+    [ipv4.address]='^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
+    [ipv4.gateway]="$IPV4_RE"
+)
+
+allowed_pattern() {   # imprime la expresión que debe cumplir el valor de una clave
+    local key=$1
+    if [[ -n "${ALLOWED[$key]:-}" ]]; then
+        echo "${ALLOWED[$key]}"
+    elif [[ "$key" =~ ^lxc\.net\.[0-9]+\.(.+)$ && -n "${NET_ALLOWED[${BASH_REMATCH[1]}]:-}" ]]; then
+        echo "${NET_ALLOWED[${BASH_REMATCH[1]}]}"
+    fi
+}
+
+net_add() {   # añade lxc.net.N (veth) conectada al bridge indicado
+    local name=$1 link=$2 config="$LXCPATH/$1/config" n=0
+    [[ "$link" =~ $IFNAME_RE ]] || die "Bridge no válido: $link"
+    [[ -d "/sys/class/net/$link/bridge" ]] || die "No existe el bridge $link en el host"
+    while grep -qE "^[[:space:]]*lxc\.net\.$n\." "$config"; do n=$((n + 1)); done
+    cp -p "$config" "$config.hangar.bak"
+    printf 'lxc.net.%d.type = veth\nlxc.net.%d.link = %s\nlxc.net.%d.flags = up\nlxc.net.%d.hwaddr = 00:16:3e:%02x:%02x:%02x\n' \
+        "$n" "$n" "$link" "$n" "$n" $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)) >> "$config"
+    echo "$n"
+}
+
+net_del() {   # quita todas las claves lxc.net.N
+    local name=$1 n=$2 config="$LXCPATH/$1/config"
+    [[ "$n" =~ ^[0-9]+$ ]] || die "Interfaz no válida: $n"
+    grep -qE "^[[:space:]]*lxc\.net\.$n\." "$config" || die "No existe la interfaz net.$n"
+    cp -p "$config" "$config.hangar.bak"
+    grep -vE "^[[:space:]]*lxc\.net\.$n\." "$config.hangar.bak" > "$config.tmp" || true
+    cat "$config.tmp" > "$config"
+    rm -f "$config.tmp"
+}
+
+create() {
+    local name=$1 dist=$2 release=$3 arch=$4
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$ ]] || die "Nombre no válido: $name"
+    [[ ! -e "$LXCPATH/$name" ]] || die "Ya existe el contenedor: $name"
+    for v in "$dist" "$release" "$arch"; do
+        [[ "$v" =~ ^[A-Za-z0-9._-]+$ ]] || die "Valor no válido: $v"
+    done
+    lxc-create -P "$LXCPATH" -n "$name" -t download -- -d "$dist" -r "$release" -a "$arch"
+}
+
+set_key() {
+    local name=$1 key=$2 value=${3:-}
+    local config="$LXCPATH/$name/config"
+    local pattern
+    pattern=$(allowed_pattern "$key")
+    [[ -n "$pattern" ]] || die "Clave no permitida: $key"
+    [[ -z "$value" || "$value" =~ $pattern ]] || die "Valor no válido para $key: $value"
+
+    cp -p "$config" "$config.hangar.bak"
+    # Quita las líneas existentes de esa clave y añade la nueva al final
+    awk -v k="$key" '{ line = $0; sub(/^[ \t]+/, "", line)
+                       split(line, p, /[ \t]*=/); if (p[1] != k) print }' \
+        "$config.hangar.bak" > "$config.tmp"
+    [[ -n "$value" ]] && echo "$key = $value" >> "$config.tmp"
+    cat "$config.tmp" > "$config"   # conserva dueño y permisos
+    rm -f "$config.tmp"
+
+    # Si está encendido, se intenta aplicar en caliente
+    if [[ "$(state "$name")" == "RUNNING" && "$key" == lxc.cgroup2.* ]]; then
+        local cg=${key#lxc.cgroup2.} live=$value
+        [[ -z "$live" && "$cg" == memory.max ]] && live=max
+        if [[ -n "$live" ]] && lxc-cgroup -P "$LXCPATH" -n "$name" "$cg" "$live" 2>/dev/null; then
+            echo "$key aplicado en caliente."
+        else
+            echo "$key se aplicará al reiniciar el contenedor."
+        fi
+    fi
+}
+
+action=${1:-}
+name=${2:-}
+
+case "$action" in
+    dump)
+        if [[ -n "$name" ]]; then
+            check_name "$name"; dump_one "$name"
+        else
+            for c in $(lxc-ls -P "$LXCPATH" -1); do dump_one "$c"; done
+        fi
+        ;;
+    passwd)
+        check_name "$name"
+        if [[ "$(state "$name")" == "RUNNING" ]]; then
+            lxc-attach -P "$LXCPATH" -n "$name" -- cat /etc/passwd
+        else
+            # Apagado: se lee del rootfs, comprobando que no sea un enlace
+            # que apunte fuera del contenedor.
+            rootfs=$(realpath "$LXCPATH/$name/rootfs")
+            file=$(realpath -e "$rootfs/etc/passwd") || die "No hay /etc/passwd"
+            [[ "$file" == "$rootfs/"* ]] || die "Ruta sospechosa: $file"
+            cat "$file"
+        fi
+        ;;
+    start)
+        check_name "$name"
+        if [[ "$(state "$name")" == "FROZEN" ]]; then
+            lxc-unfreeze -P "$LXCPATH" -n "$name"
+        else
+            lxc-start -P "$LXCPATH" -n "$name" -d
+        fi
+        ;;
+    stop)    check_name "$name"; lxc-stop -P "$LXCPATH" -n "$name" -t 60 ;;
+    kill)    check_name "$name"; lxc-stop -P "$LXCPATH" -n "$name" -k ;;
+    restart) check_name "$name"; lxc-stop -P "$LXCPATH" -n "$name" -r -t 60 ;;
+    destroy)
+        check_name "$name"
+        [[ "$(state "$name")" == "STOPPED" ]] || die "Apaga el contenedor antes de borrarlo"
+        lxc-destroy -P "$LXCPATH" -n "$name" -s   # -s: también sus snapshots
+        ;;
+    attach)
+        check_name "$name"
+        [[ "$(state "$name")" == "RUNNING" ]] || die "Arranca el contenedor para abrir su consola"
+        exec lxc-attach -P "$LXCPATH" -n "$name" --clear-env \
+            -v TERM="${TERM:-xterm-256color}" -v HOME=/root \
+            -v PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            -- /bin/sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi'
+        ;;
+    net-add) check_name "$name"; net_add "$name" "${3:?Falta el bridge}" ;;
+    net-del) check_name "$name"; net_del "$name" "${3:?Falta la interfaz}" ;;
+    snap-list)
+        check_name "$name"
+        for d in "$LXCPATH/$name/snaps"/snap*/; do
+            [[ -d "$d" ]] || continue
+            ts=$(cat "$d/ts" 2>/dev/null || true)
+            comment=""
+            [[ -f "$d/comment" ]] && comment=$(tr '\n|' '  ' < "$d/comment")
+            echo "$(basename "$d")|$ts|$comment"
+        done
+        ;;
+    snap-create)
+        check_name "$name"
+        [[ "$(state "$name")" == "STOPPED" ]] || die "Apaga el contenedor para hacer el snapshot"
+        comment_file=$(mktemp)
+        trap 'rm -f "$comment_file"' EXIT
+        printf '%s\n' "${3:-}" | head -c 2000 > "$comment_file"
+        lxc-snapshot -P "$LXCPATH" -n "$name" -c "$comment_file"
+        ;;
+    snap-restore|snap-delete)
+        check_name "$name"
+        snap=${3:?Falta el snapshot}
+        [[ "$snap" =~ ^snap[0-9]+$ && -d "$LXCPATH/$name/snaps/$snap" ]] || die "No existe el snapshot: $snap"
+        if [[ "$action" == snap-delete ]]; then
+            lxc-snapshot -P "$LXCPATH" -n "$name" -d "$snap"
+        else
+            [[ "$(state "$name")" == "STOPPED" ]] || die "Apaga el contenedor para restaurar"
+            # Mismo nombre: sustituye al contenedor actual (sus snapshots se conservan)
+            lxc-snapshot -P "$LXCPATH" -n "$name" -r "$snap" -N "$name"
+        fi
+        ;;
+    set)   check_name "$name"; set_key "$name" "${3:?Falta la clave}" "${4:-}" ;;
+    create) create "$name" "${3:?Falta la distro}" "${4:?Falta la versión}" "${5:-amd64}" ;;
+    *) die "Uso: $0 {dump [nombre]|passwd|start|stop|kill|restart|destroy|set|create|attach|net-*|snap-*} nombre [...]" ;;
+esac

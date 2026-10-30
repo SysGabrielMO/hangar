@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+{% from "_fields.html" import render_fields %}
+{% block title %}{{ m.name }} · Hangar{% endblock %}
+{% block content %}
+{% set base_url = "/m/" ~ m.kind ~ "/" ~ (m.id | urlencode) %}
+
+<a href="/" class="back">← Todas las máquinas</a>
+
+<section class="machine-head">
+  <div>
+    <h1><span class="dot {{ m.state }}"></span>{{ m.name }}</h1>
+    <div class="head-meta">
+      <span class="badge {{ m.kind }}">{{ driver.label }}</span>
+      <span class="muted">{{ {"running": "Encendida", "stopped": "Apagada", "paused": "Pausada"}.get(m.state, "Desconocido") }}</span>
+      {% if meta.module %}<a class="tag module" href="/?module={{ meta.module | urlencode }}" title="{{ modules[meta.module] }}">{{ meta.module }}</a>{% endif %}
+      {% for t in meta.tag_list %}<span class="tag">{{ t }}</span>{% endfor %}
+    </div>
+    {% if meta.description %}<p class="lead">{{ meta.description }}</p>{% endif %}
+  </div>
+  <div class="actions">
+    {% if m.state == "running" %}
+    <a class="btn" href="{{ base_url }}/console" target="_blank" rel="noopener"
+       title="Terminal en una pestaña nueva">Consola</a>
+    {% endif %}
+    {% if m.display %}
+    <form method="post" action="{{ base_url }}/display"
+          title="Abre la pantalla ({{ m.display | upper }}) con virt-viewer en tu escritorio">
+      <button class="btn">Pantalla</button>
+    </form>
+    {% endif %}
+    {% if m.state == "running" %}
+    <form method="post" action="{{ base_url }}/restart" data-confirm="¿Reiniciar? Pulsa otra vez">
+      <button class="btn">Reiniciar</button>
+    </form>
+    <form method="post" action="{{ base_url }}/stop" data-confirm="¿Seguro? Pulsa otra vez">
+      <button class="btn danger">Apagar</button>
+    </form>
+    <form method="post" action="{{ base_url }}/kill" data-confirm="¿Forzar? Pulsa otra vez"
+          title="Corta la máquina en seco, como quitar el cable. Úsalo si no responde a Apagar.">
+      <button class="btn danger subtle">Forzar apagado</button>
+    </form>
+    {% elif m.state == "paused" %}
+    <form method="post" action="{{ base_url }}/start">
+      <button class="btn primary">Reanudar</button>
+    </form>
+    <form method="post" action="{{ base_url }}/kill" data-confirm="¿Forzar? Pulsa otra vez">
+      <button class="btn danger subtle">Forzar apagado</button>
+    </form>
+    {% else %}
+    <form method="post" action="{{ base_url }}/start">
+      <button class="btn primary">Arrancar</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+
+{% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+<nav class="tabs">
+  {% for key, label in tabs.items() %}
+  <a href="{{ base_url }}?tab={{ key }}" class="{% if tab == key %}active{% endif %}">{{ label }}</a>
+  {% endfor %}
+</nav>
+
+{% if tab == "info" %}
+<div class="grid">
+  {% for title, rows in m.sections.items() if rows %}
+  <section class="card">
+    <h2>{{ title }}</h2>
+    <dl>
+      {% for label, value in rows %}
+      <dt>{{ label }}</dt><dd class="{% if '/' in value or ':' in value %}mono{% endif %}">{{ value }}</dd>
+      {% endfor %}
+    </dl>
+  </section>
+  {% endfor %}
+</div>
+
+{% elif tab == "network" %}
+{% if tab_error %}
+<div class="alert error">{{ tab_error }}</div>
+{% else %}
+<section class="card">
+  <h2>Interfaces ({{ ifaces | length }})</h2>
+  {% for i in ifaces %}
+  <div class="iface">
+    <div class="iface-head">
+      <div>
+        <strong>{{ i.network }}</strong>
+        <span class="muted small mono">{{ i.mac }}{% if i.model %} · {{ i.model }}{% endif %}</span>
+        <div class="small">
+          IP: <span class="mono">{{ i.ips | join(", ") or ("—" if m.state == "running" else "apagada") }}</span>
+          <span class="muted">· {{ i.ip_config }}</span>
+        </div>
+      </div>
+      <form method="post" action="{{ base_url }}/network/{{ i.key | urlencode }}/remove"
+            data-confirm="¿Quitar? Pulsa otra vez">
+        <button class="btn small danger subtle">Quitar</button>
+      </form>
+    </div>
+    {% if i.can_set_ip %}
+    <details class="ip-form">
+      <summary>Cambiar IP</summary>
+      <form method="post" action="{{ base_url }}/network/{{ i.key | urlencode }}/ip" class="inline-form"
+            data-confirm="¿Cambiar la IP? Pulsa otra vez">
+        <label>Modo
+          <select name="mode" data-ip-mode>
+            <option value="static">Estática</option>
+            <option value="dhcp">{{ "Quitar reserva (IP libre del rango)" if i.dhcp else "DHCP" }}</option>
+          </select>
+        </label>
+        <label data-static>IP / máscara <input name="address" placeholder="192.168.10.20/24" value="{{ (i.ips | first) if i.ips else '' }}"></label>
+        {% if not i.dhcp %}
+        <label data-static>Puerta de enlace <input name="gateway" placeholder="opcional"></label>
+        <label data-static>DNS <input name="dns" placeholder="opcional, p. ej. 1.1.1.1 8.8.8.8"></label>
+        {% endif %}
+        <button class="btn primary small">Aplicar</button>
+      </form>
+      <p class="muted small">{{ i.set_ip_hint }}</p>
+    </details>
+    {% else %}
+    <p class="muted small">{{ i.set_ip_hint }}</p>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="muted">Sin interfaces de red.</p>
+  {% endfor %}
+</section>
+
+<form class="card edit-form snapshot-new" method="post" action="{{ base_url }}/network/add">
+  <h2>Añadir interfaz</h2>
+  {{ render_fields(iface_fields) }}
+  <div class="form-foot">
+    <button class="btn primary">Añadir</button>
+    <a class="muted small" href="/networks">Ver todas las redes →</a>
+  </div>
+</form>
+{% endif %}
+
+{% elif tab == "edit" %}
+{% if tab_error %}
+<div class="alert error">{{ tab_error }}</div>
+{% else %}
+<form class="card edit-form" method="post" action="{{ base_url }}/edit"
+      data-confirm="¿Aplicar a {{ m.name }}? Pulsa otra vez">
+  {{ render_fields(fields) }}
+  <div class="form-foot">
+    <button class="btn primary">Aplicar cambios</button>
+    {% if m.kind == "kvm" and m.state == "running" %}
+    <span class="muted">La VM está encendida: CPU y memoria se aplican en el próximo arranque.</span>
+    {% endif %}
+  </div>
+</form>
+{% endif %}
+
+{% elif tab == "snapshots" %}
+{% if driver.no_snapshots_reason %}
+<div class="alert info">{{ driver.no_snapshots_reason }}</div>
+{% elif tab_error %}
+<div class="alert error">{{ tab_error }}</div>
+{% else %}
+<section class="card">
+  <h2>Snapshots ({{ snaps | length }})</h2>
+  {% if snaps %}
+  <div class="table-wrap flat">
+  <table class="snapshots">
+    <thead><tr><th>Nombre</th><th>Fecha</th><th>Estado</th><th>Descripción</th><th></th></tr></thead>
+    <tbody>
+    {% for s in snaps | reverse %}
+      <tr>
+        <td class="name"><strong>{{ s.name }}</strong>
+          {% if s.current %}<span class="tag current" title="La máquina parte de este snapshot">actual</span>{% endif %}
+          {% if s.parent %}<div class="muted small">desde {{ s.parent }}</div>{% endif %}
+        </td>
+        <td class="nowrap">{{ s.created }}</td>
+        <td class="muted">{{ s.state }}</td>
+        <td>{{ s.description }}</td>
+        <td><div class="row-actions">
+          <form method="post" action="{{ base_url }}/snapshots/{{ s.name | urlencode }}/revert"
+                data-confirm="¿Volver? Se pierde lo no guardado">
+            <button class="btn small">Volver a este</button>
+          </form>
+          <form method="post" action="{{ base_url }}/snapshots/{{ s.name | urlencode }}/delete"
+                data-confirm="¿Borrar? Pulsa otra vez">
+            <button class="btn small danger subtle">Borrar</button>
+          </form>
+        </div></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">Todavía no hay snapshots.</p>
+  {% endif %}
+</section>
+
+<form class="card edit-form snapshot-new" method="post" action="{{ base_url }}/snapshots/create">
+  <h2>Nuevo snapshot</h2>
+  {% if not driver.snapshot_name_auto %}
+  <div class="field">
+    <label for="f-snap-name">Nombre</label>
+    <input id="f-snap-name" name="name" value="{{ default_snapshot_name }}" required>
+  </div>
+  {% endif %}
+  <div class="field">
+    <label for="f-snap-desc">Descripción <span class="muted">(opcional)</span></label>
+    <input id="f-snap-desc" name="description" placeholder="Antes de instalar Apache…">
+  </div>
+  <div class="form-foot">
+    <button class="btn primary" {% if m.kind == "lxc" and m.state != "stopped" %}disabled{% endif %}>Crear snapshot</button>
+    {% if m.kind == "lxc" %}
+    <span class="muted">En LXC el contenedor debe estar apagado para crear o volver a un snapshot (se copia el rootfs entero).</span>
+    {% elif m.state == "running" %}
+    <span class="muted">Está encendida: se guarda también la memoria, y la VM se pausa unos segundos.</span>
+    {% endif %}
+  </div>
+</form>
+{% endif %}
+
+{% elif tab == "delete" %}
+{% if tab_error %}
+<div class="alert error">{{ tab_error }}</div>
+{% else %}
+<form class="card edit-form danger-zone" method="post" action="{{ base_url }}/delete">
+  <h2>Borrar {{ m.name }}</h2>
+  {% if m.state != "stopped" %}
+  <div class="alert error">Está {{ "encendida" if m.state == "running" else "pausada" }}: apágala antes de borrarla.</div>
+  {% endif %}
+  <div class="plan">
+    <div>
+      <strong>Se borrará</strong>
+      <ul>{% for item in plan.delete %}<li>{{ item }}</li>{% endfor %}</ul>
+    </div>
+    {% if plan.keep %}
+    <div>
+      <strong>Se conserva</strong>
+      <ul>{% for item in plan.keep %}<li>{{ item }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+  </div>
+  {{ render_fields(plan.options) }}
+  <div class="field">
+    <label for="f-confirm">Escribe <code>{{ m.name }}</code> para confirmar</label>
+    <input id="f-confirm" name="confirm_name" autocomplete="off" required>
+  </div>
+  <div class="form-foot">
+    <button class="btn danger-solid" {% if m.state != "stopped" %}disabled{% endif %}>Borrar para siempre</button>
+    <span class="muted">No se puede deshacer.</span>
+  </div>
+</form>
+{% endif %}
+
+{% elif tab == "users" %}
+<section class="card">
+  {% if tab_error %}
+    <div class="alert error">{{ tab_error }}</div>
+  {% else %}
+  <table class="users">
+    <thead><tr><th>Usuario</th><th>UID</th><th>Home</th><th>Shell</th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr class="{% if not u.can_login %}system{% endif %}">
+        <td><strong>{{ u.name }}</strong>{% if u.can_login %} <span class="tag">login</span>{% endif %}</td>
+        <td>{{ u.uid }}</td><td class="mono">{{ u.home }}</td><td class="mono">{{ u.shell }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+{% elif tab == "notes" %}
+<div class="grid notes">
+  <form class="card" method="post" action="{{ base_url }}/meta">
+    <h2>Editar</h2>
+    <label>Módulo
+      <select name="module">
+        <option value="">— Sin módulo —</option>
+        {% for k, label in modules.items() %}<option value="{{ k }}" {% if meta.module == k %}selected{% endif %}>{{ k }} · {{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Descripción corta
+      <input name="description" value="{{ meta.description }}" placeholder="Para qué sirve esta máquina">
+    </label>
+    <label>Etiquetas <span class="muted">(separadas por comas)</span>
+      <input name="tags" value="{{ meta.tags }}" placeholder="lab, log4j, asir">
+    </label>
+    <label>Notas · cómo está montada <span class="muted">(Markdown)</span>
+      <textarea name="notes" rows="16" placeholder="## Servicios&#10;- Apache en :80&#10;&#10;## Credenciales de laboratorio&#10;...">{{ meta.notes }}</textarea>
+    </label>
+    <div class="form-foot">
+      <button class="btn primary">Guardar</button>
+      {% if meta.updated_at %}<span class="muted">Última edición: {{ meta.updated_at.replace("T", " ") }}</span>{% endif %}
+    </div>
+  </form>
+  <section class="card prose">
+    <h2>Vista previa</h2>
+    {% if meta.notes %}{{ meta.notes | markdown }}{% else %}<p class="muted">Aún no hay notas.</p>{% endif %}
+  </section>
+</div>
+
+{% elif tab == "config" %}
+<section class="card">
+  <h2>{{ m.raw_label }}</h2>
+  <pre class="raw">{{ m.raw_config }}</pre>
+</section>
+{% endif %}
+
+{% endblock %}

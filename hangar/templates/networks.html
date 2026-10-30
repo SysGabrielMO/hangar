@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Redes · Hangar{% endblock %}
+{% macro members(net) %}
+  {% for kind, id, name, ips in net.members %}
+  <a class="member" href="/m/{{ kind }}/{{ id | urlencode }}">
+    <span class="badge {{ kind }}">{{ drivers[kind].label }}</span> {{ name }}
+    {% if ips %}<span class="mono muted">{{ ips | join(", ") }}</span>{% endif %}
+  </a>
+  {% else %}<span class="muted small">Ninguna máquina</span>{% endfor %}
+{% endmacro %}
+{% block content %}
+<a href="/" class="back">← Todas las máquinas</a>
+<h1 class="page-title">Redes</h1>
+
+{% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% for e in errors %}<div class="alert error">{{ e }}</div>{% endfor %}
+
+<section class="card">
+  <h2>Redes de libvirt (KVM) · {{ libvirt_nets | length }}</h2>
+  <div class="table-wrap flat">
+  <table class="nets">
+    <thead><tr><th>Red</th><th>Modo</th><th>Subred</th><th>DHCP</th><th>Máquinas</th><th></th></tr></thead>
+    <tbody>
+    {% for n in libvirt_nets %}
+    <tr class="{% if not n.active %}inactive{% endif %}">
+      <td><strong>{{ n.name }}</strong>
+        <div class="muted small mono">{{ n.bridge }}{% if not n.active %} · inactiva{% endif %}{% if n.autostart %} · autoarranque{% endif %}</div></td>
+      <td>{{ n.mode }}</td>
+      <td class="mono nowrap">{{ n.subnet or "—" }}{% if n.gateway %}<div class="muted small">host {{ n.gateway }}</div>{% endif %}</td>
+      <td class="small">{% if n.dhcp %}<span class="mono">{{ n.dhcp }}</span>{% else %}<span class="tag">sin DHCP</span>{% endif %}</td>
+      <td class="members">{{ members(n) }}</td>
+      <td><div class="row-actions">
+        {% if n.active %}
+        <form method="post" action="/networks/libvirt/{{ n.name | urlencode }}/stop" data-confirm="¿Desactivar?">
+          <button class="btn small">Desactivar</button></form>
+        {% else %}
+        <form method="post" action="/networks/libvirt/{{ n.name | urlencode }}/start">
+          <button class="btn small">Activar</button></form>
+        {% endif %}
+        <form method="post" action="/networks/libvirt/{{ n.name | urlencode }}/delete" data-confirm="¿Borrar? Pulsa otra vez">
+          <button class="btn small danger subtle">Borrar</button></form>
+      </div></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<form class="card edit-form snapshot-new" method="post" action="/networks/libvirt/create">
+  <h2>Nueva red libvirt</h2>
+  <div class="inline-form">
+    <label>Nombre <input name="name" required placeholder="lab-bbdd"></label>
+    <label>Tipo
+      <select name="mode">
+        <option value="isolated">Aislada (solo entre VMs y el host)</option>
+        <option value="nat">NAT (con salida a Internet)</option>
+      </select>
+    </label>
+    <label>IP del host / máscara <input name="address" required placeholder="10.30.0.1/24"></label>
+  </div>
+  <div class="field checkbox"><label><input type="checkbox" name="dhcp" value="1"> Con DHCP (rango en la mitad alta de la subred; la baja queda para IPs fijas)</label></div>
+  <div class="field checkbox"><label><input type="checkbox" name="autostart" value="1" checked> Activar al arrancar el host</label></div>
+  <div class="form-foot"><button class="btn primary">Crear red</button></div>
+</form>
+
+{% if bridges %}
+<section class="card snapshot-new">
+  <h2>Otros bridges del host · {{ bridges | length }}</h2>
+  <p class="muted small">Bridges que no son de libvirt ni de Docker (p. ej. lxcbr0 o los que hayas creado tú). Los usan los contenedores LXC.</p>
+  <div class="table-wrap flat">
+  <table class="nets">
+    <thead><tr><th>Bridge</th><th>Máquinas</th></tr></thead>
+    <tbody>
+    {% for n in bridges %}
+    <tr><td class="mono"><strong>{{ n.name }}</strong></td><td class="members">{{ members(n) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="card snapshot-new">
+  <h2>Redes de Docker · {{ docker_nets | length }}</h2>
+  <div class="table-wrap flat">
+  <table class="nets">
+    <thead><tr><th>Red</th><th>Driver</th><th>Subred</th><th>Contenedores</th><th></th></tr></thead>
+    <tbody>
+    {% for n in docker_nets %}
+    <tr>
+      <td><strong>{{ n.name }}</strong>{% if n.bridge %}<div class="muted small mono">{{ n.bridge }}</div>{% endif %}</td>
+      <td>{{ n.mode }}</td>
+      <td class="mono nowrap">{{ n.subnet or "—" }}{% if n.gateway %}<div class="muted small">gw {{ n.gateway }}</div>{% endif %}</td>
+      <td class="members">{{ members(n) }}</td>
+      <td>{% if not n.builtin %}
+        <form method="post" action="/networks/docker/{{ n.name | urlencode }}/delete" data-confirm="¿Borrar? Pulsa otra vez">
+          <button class="btn small danger subtle">Borrar</button></form>
+      {% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<form class="card edit-form snapshot-new" method="post" action="/networks/docker/create">
+  <h2>Nueva red Docker</h2>
+  <div class="inline-form">
+    <label>Nombre <input name="name" required placeholder="red-web"></label>
+    <label>Subred <input name="subnet" placeholder="172.30.0.0/24 (opcional)"></label>
+  </div>
+  <p class="muted small">Ponle subred si quieres asignar IPs fijas a los contenedores.</p>
+  <div class="form-foot"><button class="btn primary">Crear red</button></div>
+</form>
+{% endblock %}

@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% macro url(kind=kind, state=state, q=q, module=module) -%}
+/?kind={{ kind | urlencode }}&state={{ state | urlencode }}&module={{ module | urlencode }}&q={{ q | urlencode }}
+{%- endmacro %}
+{% block content %}
+
+<section class="stats">
+  <div class="stat"><span class="stat-n">{{ total }}</span><span class="muted">máquinas</span></div>
+  <div class="stat"><span class="stat-n running-n">{{ running }}</span><span class="muted">encendidas</span></div>
+  {% for k, d in drivers.items() %}
+  <div class="stat"><span class="stat-n">{{ counts[k] }}</span><span class="badge {{ k }}">{{ d.label }}</span></div>
+  {% endfor %}
+</section>
+
+{% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+{% for job in jobs %}
+<div class="alert {{ {'running': 'info', 'done': 'ok', 'error': 'error'}[job.status] }}">
+  {% if job.status == "running" %}<span class="spinner"></span>{% endif %}
+  <a href="/jobs/{{ job.id }}">{{ job.title }}</a> ·
+  {{ {"running": "en curso", "done": "terminada", "error": "falló"}[job.status] }}
+</div>
+{% endfor %}
+
+{% for k, err in errors.items() %}
+<div class="alert error"><strong>{{ drivers[k].label }}:</strong> {{ err }}</div>
+{% endfor %}
+
+<nav class="chips modules-nav" aria-label="Módulos">
+  <a href="{{ url(module='') }}" class="chip {% if not module %}active{% endif %}">Todos los módulos</a>
+  {% for key in modules %}
+  <a href="{{ url(module=key) }}" class="chip {% if module == key %}active{% endif %}" title="{{ modules[key] }}">
+    {{ key }} <span class="chip-n">{{ module_counts[key] }}</span>
+  </a>
+  {% endfor %}
+  <a href="{{ url(module=no_module) }}" class="chip {% if module == no_module %}active{% endif %}">
+    Sin módulo <span class="chip-n">{{ module_counts[""] }}</span>
+  </a>
+</nav>
+
+<form class="filters" method="get" action="/">
+  <div class="chips">
+    <a href="{{ url(kind='') }}" class="chip {% if not kind %}active{% endif %}">Todas</a>
+    {% for k, d in drivers.items() %}
+    <a href="{{ url(kind=k) }}" class="chip {% if kind == k %}active{% endif %}">{{ d.label }}</a>
+    {% endfor %}
+  </div>
+  <input type="hidden" name="kind" value="{{ kind }}">
+  <input type="hidden" name="module" value="{{ module }}">
+  <select name="state" onchange="this.form.submit()">
+    <option value="">Cualquier estado</option>
+    <option value="running" {% if state == 'running' %}selected{% endif %}>Encendidas</option>
+    <option value="stopped" {% if state == 'stopped' %}selected{% endif %}>Apagadas</option>
+    <option value="paused" {% if state == 'paused' %}selected{% endif %}>Pausadas</option>
+  </select>
+  <input type="search" name="q" value="{{ q }}" placeholder="Buscar por nombre, IP, descripción o etiqueta">
+</form>
+
+{% for key, items in groups %}
+<section class="module-group">
+  <header class="module-head">
+    <div>
+      <h2>{{ key or "Sin módulo" }} <span class="muted">· {{ items | length }}</span></h2>
+      {% if key %}<span class="muted small">{{ modules[key] }}</span>{% endif %}
+    </div>
+    {% if key %}
+    <div class="actions">
+      <form method="post" action="/modules/{{ key | urlencode }}/start" data-confirm="¿Encender todas? Pulsa otra vez">
+        <button class="btn small">Encender todas</button>
+      </form>
+      <form method="post" action="/modules/{{ key | urlencode }}/stop" data-confirm="¿Apagar todas? Pulsa otra vez">
+        <button class="btn small">Apagar todas</button>
+      </form>
+      <a class="btn small" href="/modules/{{ key | urlencode }}/export.md" title="Documentación del laboratorio en Markdown">Exportar</a>
+    </div>
+    {% endif %}
+  </header>
+  <div class="table-wrap">
+  <table class="machines">
+    <thead>
+      <tr><th>Nombre</th><th>Tipo</th><th>CPU</th><th>Memoria</th><th>IP</th><th>Descripción</th><th>Módulo</th></tr>
+    </thead>
+    <tbody>
+    {% for m, meta in items %}
+      <tr data-href="/m/{{ m.kind }}/{{ m.id | urlencode }}">
+        <td class="name">
+          <span class="dot {{ m.state }}" title="{{ m.state }}"></span>
+          <a href="/m/{{ m.kind }}/{{ m.id | urlencode }}">{{ m.name }}</a>
+        </td>
+        <td><span class="badge {{ m.kind }}">{{ drivers[m.kind].label }}</span></td>
+        <td>{{ m.cpus }}</td>
+        <td class="nowrap">{{ m.memory }}</td>
+        <td class="mono">{{ m.ips | join(", ") or "—" }}</td>
+        <td class="desc">
+          {{ meta.description or "" }}
+          {% for t in meta.tag_list %}<span class="tag">{{ t }}</span>{% endfor %}
+        </td>
+        <td>
+          <form method="post" action="/m/{{ m.kind }}/{{ m.id | urlencode }}/module" class="module-pick">
+            <input type="hidden" name="next" value="{{ here }}">
+            <select name="module" data-autosubmit aria-label="Módulo de {{ m.name }}">
+              <option value="">—</option>
+              {% for k in modules %}<option value="{{ k }}" {% if meta.module == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+            </select>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% else %}
+<div class="card empty">No hay máquinas que coincidan.</div>
+{% endfor %}
+{% endblock %}

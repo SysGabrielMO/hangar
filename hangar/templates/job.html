@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} · Hangar{% endblock %}
+{% block head %}{% if job.status == "running" %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block content %}
+
+<a href="/" class="back">← Todas las máquinas</a>
+<h1 class="page-title">{{ job.title }}</h1>
+
+{% if job.status == "running" %}
+<div class="alert info"><span class="spinner"></span> En curso desde las {{ job.started }}… esta página se actualiza sola.</div>
+{% elif job.status == "done" %}
+<div class="alert ok">
+  Terminado.
+  {% if job.link %}
+  <a class="btn primary small" href="{{ job.link }}">Volver →</a>
+  {% else %}
+  <a class="btn primary small" href="/m/{{ job.kind }}/{{ job.result_id | urlencode }}?tab={{ job.tab }}">Ver la máquina →</a>
+  {% endif %}
+</div>
+{% else %}
+<div class="alert error">{{ job.error }}</div>
+{% endif %}
+
+<section class="card">
+  <h2>Registro</h2>
+  <pre class="raw log" id="log">{{ job.lines | join("\n") or "…" }}</pre>
+</section>
+<script>
+  const log = document.getElementById("log");
+  log.scrollTop = log.scrollHeight;
+</script>
+{% endblock %}

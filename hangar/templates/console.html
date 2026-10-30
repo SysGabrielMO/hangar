@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ m.name }} · Consola</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+  <style>
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; background: #0b0e12; color: #e6e8eb; }
+    .console-bar { display: flex; align-items: center; gap: 12px; padding: 8px 14px;
+                   background: #171b21; border-bottom: 1px solid #2a3039; font-size: 14px; }
+    .console-bar a { color: #8bb4ff; }
+    .console-bar .hint { color: #8b939e; font-size: 13px; }
+    .console-bar .status { margin-left: auto; color: #8b939e; font-size: 13px; }
+    #terminal { flex: 1; min-height: 0; padding: 6px 0 0 8px; }
+  </style>
+</head>
+<body>
+  <div class="console-bar">
+    <span class="dot {{ m.state }}"></span><strong>{{ m.name }}</strong>
+    <span class="badge {{ m.kind }}">{{ driver.label }}</span>
+    <span class="hint">{{ hint }}</span>
+    <span class="status" id="status">Conectando…</span>
+    <a href="/m/{{ m.kind }}/{{ m.id | urlencode }}">Ficha</a>
+  </div>
+  <div id="terminal"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+  <script>
+    const term = new Terminal({
+      cursorBlink: true, fontSize: 14, scrollback: 5000,
+      fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, monospace',
+      theme: { background: "#0b0e12" },
+    });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById("terminal"));
+    fit.fit();
+    term.focus();
+
+    const status = document.getElementById("status");
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}${location.pathname}/ws`);
+    ws.binaryType = "arraybuffer";
+    const send = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
+    const resize = () => { fit.fit(); send({ type: "resize", cols: term.cols, rows: term.rows }); };
+
+    ws.onopen = () => { status.textContent = "Conectado"; resize(); };
+    ws.onmessage = (e) => term.write(typeof e.data === "string" ? e.data : new Uint8Array(e.data));
+    ws.onclose = () => { status.textContent = "Desconectado"; term.options.cursorBlink = false; };
+    term.onData((data) => send({ type: "input", data }));
+    window.addEventListener("resize", resize);
+  </script>
+</body>
+</html>

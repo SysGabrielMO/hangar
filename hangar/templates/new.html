@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "_fields.html" import render_fields %}
+{% block title %}Nueva máquina · Hangar{% endblock %}
+{% block content %}
+
+<a href="/" class="back">← Todas las máquinas</a>
+<h1 class="page-title">Nueva máquina</h1>
+
+<nav class="tabs">
+  {% for k, d in drivers.items() %}
+  <a href="/new/{{ k }}" class="{% if kind == k %}active{% endif %}">{{ d.label }}</a>
+  {% endfor %}
+</nav>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+{% if fields %}
+<form class="card edit-form" method="post" action="/new/{{ kind }}">
+  {{ render_fields(fields) }}
+  <div class="field">
+    <label for="f-module">Módulo</label>
+    <select id="f-module" name="module">
+      <option value="">— Sin módulo —</option>
+      {% for k, label in modules.items() %}<option value="{{ k }}" {% if module == k %}selected{% endif %}>{{ k }} · {{ label }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="f-description">Descripción <span class="muted">(opcional)</span></label>
+    <input id="f-description" name="description" value="{{ description }}" placeholder="Para qué sirve esta máquina">
+  </div>
+  <div class="form-foot">
+    <button class="btn primary">Crear {{ drivers[kind].label }}</button>
+  </div>
+</form>
+{% endif %}
+{% endblock %}
