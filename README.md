@@ -145,6 +145,13 @@ Hangar se pierde el registro, no la máquina).
 (`sudo apt install libvirt-daemon-system`) y añade tu usuario al grupo
 `libvirt` (`sudo usermod -aG libvirt $USER`, y vuelve a iniciar sesión).
 
+**«.venv/bin/uvicorn: No existe el fichero o el directorio»**: pasaba con
+versiones antiguas de `run.sh` cuando la primera instalación fallaba a medias.
+Actualiza (`git pull`) y vuelve a ejecutar `./run.sh`: ahora repara el entorno
+solo, y si falta algo del sistema (`python3-venv`, `python3-libvirt`) te dice
+qué instalar. También reinstala las dependencias cuando cambian tras un
+`git pull`.
+
 **«address already in use»**: ya hay un Hangar en marcha en el puerto 8090;
 úsalo, páralo o arranca otro con `PORT=8091 ./run.sh`.
 
