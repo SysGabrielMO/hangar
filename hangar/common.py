@@ -1,6 +1,8 @@
 """Piezas compartidas por las rutas web: plantillas, seguridad y utilidades."""
 from __future__ import annotations
 
+import os
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -31,6 +33,16 @@ def _render_markdown(text: str) -> Markup:
 
 
 templates.env.filters["markdown"] = _render_markdown
+
+
+# Clave de acceso: la pone el lanzador de escritorio (./hangar-app) para que solo
+# su ventana pueda usar Hangar. Sin ella (./run.sh) no se pide.
+ACCESS_TOKEN = os.environ.get("HANGAR_TOKEN", "")
+TOKEN_COOKIE = "hangar_token"
+
+
+def token_ok(value: str | None) -> bool:
+    return not ACCESS_TOKEN or secrets.compare_digest(value or "", ACCESS_TOKEN)
 
 
 def host_allowed(host: str) -> bool:

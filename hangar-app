@@ -1,0 +1,27 @@
+#!/bin/bash
+# Abre Hangar como aplicación, en su propia ventana.
+# (Para usarlo en el navegador: ./run.sh)
+set -euo pipefail
+cd "$(dirname "$(realpath "$0")")"
+source scripts/env.sh
+
+# Abierto desde el menú no hay terminal: la salida va a un log y los errores
+# se avisan con una notificación del escritorio
+if [[ ! -t 1 ]]; then
+    log="${XDG_CACHE_HOME:-$HOME/.cache}/hangar/hangar.log"
+    mkdir -p "$(dirname "$log")"
+    exec >>"$log" 2>&1
+    echo "--- $(date '+%F %T')"
+    notify() { notify-send -a Hangar -i "$PWD/hangar/static/icon.svg" "$@" 2>/dev/null || true; }
+    fail() {
+        echo "Error: $*"
+        notify -u critical "Hangar no ha podido arrancar" "$* · Detalles en $log"
+        exit 1
+    }
+    if [[ ! -x .venv/bin/python ]] || ! .venv/bin/python -c "import PySide6" 2>/dev/null; then
+        notify "Preparando Hangar" "La primera vez se descargan unos 700 MB; tardará unos minutos."
+    fi
+fi
+
+prepare_env requirements.txt requirements-desktop.txt
+exec .venv/bin/python -m hangar.desktop "$@"

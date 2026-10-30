@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+  <!-- Hangar: tejado a dos aguas y puerta abierta -->
+  <path d="M22 100V56l42-26 42 26v44H88V70H40v30z" fill="#fff"/>
+  <!-- Tres "máquinas" dentro: KVM, LXC y Docker -->
+  <rect x="46" y="76" width="36" height="6" rx="3" fill="#bfdbfe"/>
+  <rect x="46" y="86" width="36" height="6" rx="3" fill="#93c5fd"/>
+  <rect x="46" y="96" width="36" height="4" rx="2" fill="#60a5fa"/>
+</svg>

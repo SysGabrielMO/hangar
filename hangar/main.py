@@ -11,8 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import console, db, jobs, modules, networks
-from .common import (BASE, back, driver_or_404, host_allowed, list_all, machine_name,
-                     safe_next, same_origin, templates)
+from .common import (ACCESS_TOKEN, BASE, TOKEN_COOKIE, back, driver_or_404, host_allowed,
+                     list_all, machine_name, safe_next, same_origin, templates, token_ok)
 from .drivers import DRIVERS, DriverError
 from .drivers.base import SNAPSHOT_NAME_RE
 
@@ -30,11 +30,23 @@ async def local_only(request: Request, call_next):
     """Hangar controla el host como root, así que:
     - solo responde si se le llama como localhost (evita DNS rebinding), y
     - rechaza POST enviados desde otras webs (evita CSRF: una página
-      cualquiera podría mandar un formulario oculto a 127.0.0.1:8090).
-    Los websockets de la consola hacen la misma comprobación en console.py."""
+      cualquiera podría mandar un formulario oculto a 127.0.0.1:8090), y
+    - abierto como aplicación, exige la clave de su ventana (otros usuarios
+      del mismo equipo también llegan a 127.0.0.1).
+    Los websockets de la consola hacen las mismas comprobaciones en console.py."""
     host = request.headers.get("host", "")
     if not host_allowed(host):
         return PlainTextResponse("Host no permitido", status_code=400)
+    if ACCESS_TOKEN:
+        given = request.query_params.get("token")
+        if given is not None and token_ok(given):
+            # La ventana entra con ?token=…: se guarda en una cookie y se quita de la URL
+            response = RedirectResponse(request.url.path, status_code=303)
+            response.set_cookie(TOKEN_COOKIE, ACCESS_TOKEN, httponly=True, samesite="strict")
+            return response
+        if not token_ok(request.cookies.get(TOKEN_COOKIE)):
+            return PlainTextResponse("Hangar está abierto como aplicación: úsalo desde su "
+                                     "ventana.", status_code=403)
     if request.method not in SAFE_METHODS:
         fetch_site = request.headers.get("sec-fetch-site", "same-origin")
         if not same_origin(request.headers.get("origin"), host) or \

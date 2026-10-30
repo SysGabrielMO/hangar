@@ -20,7 +20,8 @@ from fastapi.responses import RedirectResponse
 from starlette.websockets import WebSocketDisconnect
 
 from . import jobs
-from .common import back, driver_or_404, host_allowed, machine_name, templates
+from .common import (TOKEN_COOKIE, back, driver_or_404, host_allowed, machine_name, templates,
+                     token_ok)
 from .drivers import DRIVERS, DriverError
 
 router = APIRouter()
@@ -90,7 +91,8 @@ async def console_ws(ws: WebSocket, kind: str, machine_id: str):
     # Un websocket no pasa por el middleware HTTP: misma comprobación aquí.
     # Los navegadores siempre envían Origin en websockets, así que se exige.
     host, origin = ws.headers.get("host", ""), ws.headers.get("origin", "")
-    if not host_allowed(host) or origin.split("://", 1)[-1] != host:
+    if not host_allowed(host) or origin.split("://", 1)[-1] != host or \
+            not token_ok(ws.cookies.get(TOKEN_COOKIE)):
         await ws.close(code=1008)
         return
     await ws.accept()

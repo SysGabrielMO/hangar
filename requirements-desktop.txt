@@ -1,0 +1,3 @@
+# Solo para la aplicación de escritorio (./hangar-app): ventana con Qt WebEngine.
+# Ocupa unos 700 MB, por eso no está en requirements.txt.
+PySide6>=6.8

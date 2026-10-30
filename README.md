@@ -1,17 +1,38 @@
 # Hangar
 
-Panel web para gestionar desde un solo sitio las máquinas KVM, los
-contenedores LXC (`lxc-*`) y los contenedores Docker de este equipo.
+Aplicación para gestionar desde un solo sitio las máquinas KVM, los
+contenedores LXC (`lxc-*`) y los contenedores Docker de este equipo. Se usa
+como **aplicación de escritorio** (ventana propia) o desde el **navegador**.
 
-## Arrancar
+Requisitos: `python3-venv`, `python3-libvirt` y que tu usuario esté en los
+grupos `libvirt` y `docker`. Se ejecuta con tu usuario, **nunca con sudo**.
+
+## Como aplicación de escritorio
+
+```bash
+./scripts/install-desktop.sh   # una vez: prepara el entorno y añade Hangar al menú
+```
+
+Después ábrelo desde el menú de aplicaciones, como cualquier programa, o con
+`./hangar-app`. La primera vez descarga Qt (PySide6, unos 700 MB).
+
+- El servidor arranca solo, en un puerto libre, y se apaga al cerrar la ventana.
+- Solo esa ventana puede usarlo: entra con una clave aleatoria, así que otro
+  usuario del mismo equipo no puede abrirlo aunque llegue a `127.0.0.1`.
+- La consola se abre en su propia ventana; las exportaciones van a Descargas.
+- Atajos: F5 recarga, Alt+← / Alt+→ atrás y adelante, Ctrl+W cierra la ventana.
+- Abierto desde el menú, los mensajes van a `~/.cache/hangar/hangar.log`.
+- Usa el motor web sin aceleración por GPU (más estable en VMs y con algunos
+  drivers); `HANGAR_GPU=1 ./hangar-app` la activa. `HANGAR_DEBUG=1` muestra
+  cada página que carga.
+- Para quitarlo del menú: `./scripts/install-desktop.sh --remove`.
+
+## En el navegador
 
 ```bash
 ./run.sh            # http://127.0.0.1:8090
 ./run.sh --reload   # modo desarrollo: recarga al cambiar el código
 ```
-
-Requisitos: `python3-venv`, `python3-libvirt` y que tu usuario esté en los
-grupos `libvirt` y `docker`.
 
 ### LXC
 
@@ -50,12 +71,17 @@ y `docker`, más el ayudante LXC), así que:
 - La consola web (websocket) exige que el `Origin` sea el propio Hangar: una
   web externa no puede abrir una shell en tus máquinas.
 
-No tiene usuarios ni contraseña: no lo expongas a la red sin añadirlos.
+- Como aplicación de escritorio, además exige una clave aleatoria que solo
+  conoce su ventana: otros usuarios del mismo equipo no pueden usarlo.
+
+En modo navegador (`run.sh`) no tiene usuarios ni contraseña: en un equipo
+compartido usa la aplicación de escritorio, y no lo expongas nunca a la red.
 
 ## Estructura
 
 ```
 hangar/
+  desktop.py           aplicación de escritorio (ventana Qt + servidor interno)
   main.py              rutas de máquinas y API JSON (FastAPI)
   common.py            plantillas, seguridad y utilidades compartidas
   console.py           consola web (websocket ↔ pseudo-terminal)
@@ -70,7 +96,9 @@ hangar/
     docker_driver.py   SDK oficial de Docker
   templates/           páginas HTML (Jinja2)
   static/              style.css y app.js
-scripts/               ayudante LXC y su instalador
+scripts/               ayudante LXC, acceso directo del menú y env.sh (prepara .venv)
+hangar-app             abre la aplicación de escritorio
+run.sh                 abre el servidor para usarlo en el navegador
 ```
 
 Para añadir algo nuevo a las tres tecnologías: añade el método en
@@ -89,8 +117,8 @@ para la memoria de una práctica.
 
 ## Consola
 
-- **Consola** (máquina encendida): terminal en el navegador con
-  [xterm.js](https://xtermjs.org/) (se carga de jsDelivr, hace falta Internet).
+- **Consola** (máquina encendida): terminal con [xterm.js](https://xtermjs.org/)
+  (incluido en `hangar/static/vendor`, funciona sin Internet).
   KVM usa la consola serie (`virsh console`), LXC `lxc-attach` y Docker
   `docker exec -it`.
 - **Pantalla** (VMs con SPICE/VNC): abre `virt-viewer` en tu escritorio.
@@ -153,7 +181,11 @@ qué instalar. También reinstala las dependencias cuando cambian tras un
 `git pull`.
 
 **«address already in use»**: ya hay un Hangar en marcha en el puerto 8090;
-úsalo, páralo o arranca otro con `PORT=8091 ./run.sh`.
+úsalo, páralo o arranca otro con `PORT=8091 ./run.sh`. La aplicación de
+escritorio no tiene este problema: elige sola un puerto libre.
+
+**La aplicación no se abre desde el menú**: mira `~/.cache/hangar/hangar.log`
+o lánzala desde una terminal con `./hangar-app` para ver el error.
 
 ## API
 
