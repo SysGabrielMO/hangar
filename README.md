@@ -4,30 +4,103 @@ Aplicación para gestionar desde un solo sitio las máquinas KVM, los
 contenedores LXC (`lxc-*`) y los contenedores Docker de este equipo. Se usa
 como **aplicación de escritorio** (ventana propia) o desde el **navegador**.
 
-Requisitos: `python3-venv`, `python3-libvirt` y que tu usuario esté en los
-grupos `libvirt` y `docker`. Se ejecuta con tu usuario, **nunca con sudo**.
+Se ejecuta siempre con tu usuario, **nunca con sudo** (solo se usa sudo para
+instalar paquetes y, si usas LXC, el ayudante del paso 4).
 
-## Como aplicación de escritorio
+## Instalar la aplicación de escritorio, paso a paso
+
+Probado en Debian 13; en Ubuntu los paquetes se llaman igual.
+
+**1. Instala los paquetes del sistema.** Los imprescindibles:
 
 ```bash
-./scripts/install-desktop.sh   # una vez: prepara el entorno y añade Hangar al menú
+sudo apt install git python3-venv python3-libvirt libxcb-cursor0 libnotify-bin
 ```
 
-Después ábrelo desde el menú de aplicaciones, como cualquier programa, o con
-`./hangar-app`. La primera vez descarga Qt (PySide6, unos 700 MB).
+Y los de lo que vayas a gestionar (si ya usas KVM, LXC o Docker, ya los tendrás):
+
+```bash
+sudo apt install libvirt-daemon-system qemu-system-x86 qemu-utils virtinst virt-viewer
+```
+
+```bash
+sudo apt install lxc docker.io
+```
+
+`virt-viewer` es lo que abre la «Pantalla» de las VMs. Si instalaste Docker
+desde la web oficial de Docker, no instales `docker.io`.
+
+**2. Dale permisos a tu usuario** sobre libvirt y Docker:
+
+```bash
+sudo usermod -aG libvirt,docker $USER
+```
+
+(Si no usas Docker, deja solo `libvirt`: el grupo `docker` no existe sin él.)
+**Cierra sesión y vuelve a entrar** (o reinicia) para que se apliquen. Puedes
+comprobarlo con `groups`: deben salir `libvirt` y `docker`.
+
+**3. Descarga Hangar:**
+
+```bash
+git clone https://github.com/SysGabrielMO/hangar.git ~/hangar && cd ~/hangar
+```
+
+**4. (Solo si usas LXC)** instala el ayudante que permite gestionar los
+contenedores de `/var/lib/lxc` sin ejecutar Hangar como root:
+
+```bash
+sudo ./scripts/install-lxc-helper.sh
+```
+
+**5. Instala la aplicación** (con tu usuario, sin sudo):
+
+```bash
+./scripts/install-desktop.sh
+```
+
+Crea el entorno de Python, descarga Qt (PySide6, unos 700 MB, solo la primera
+vez) y añade **Hangar** al menú de aplicaciones con su icono.
+
+**6. Ábrela** desde el menú de aplicaciones, como cualquier programa. También
+se puede abrir desde la terminal con `./hangar-app`.
+
+### Actualizar
+
+```bash
+cd ~/hangar && git pull
+```
+
+Al abrirla, Hangar instala solo las dependencias nuevas. Si cambia el
+ayudante de LXC, repite el paso 4. Si mueves la carpeta, repite el paso 5.
+
+### Desinstalar
+
+```bash
+./scripts/install-desktop.sh --remove
+```
+
+```bash
+sudo rm -f /usr/local/sbin/hangar-lxc-helper /etc/sudoers.d/hangar
+```
+
+Y borra la carpeta `~/hangar`.
+
+### Cómo funciona la aplicación
 
 - El servidor arranca solo, en un puerto libre, y se apaga al cerrar la ventana.
 - Solo esa ventana puede usarlo: entra con una clave aleatoria, así que otro
   usuario del mismo equipo no puede abrirlo aunque llegue a `127.0.0.1`.
 - La consola se abre en su propia ventana; las exportaciones van a Descargas.
 - Atajos: F5 recarga, Alt+← / Alt+→ atrás y adelante, Ctrl+W cierra la ventana.
-- Abierto desde el menú, los mensajes van a `~/.cache/hangar/hangar.log`.
+- Abierta desde el menú, los mensajes van a `~/.cache/hangar/hangar.log`.
 - Usa el motor web sin aceleración por GPU (más estable en VMs y con algunos
   drivers); `HANGAR_GPU=1 ./hangar-app` la activa. `HANGAR_DEBUG=1` muestra
   cada página que carga.
-- Para quitarlo del menú: `./scripts/install-desktop.sh --remove`.
 
 ## En el navegador
+
+Sin instalar Qt: haz los pasos 1 a 4 y después
 
 ```bash
 ./run.sh            # http://127.0.0.1:8090
