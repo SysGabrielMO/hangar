@@ -5,14 +5,16 @@ set -euo pipefail
 cd "$(dirname "$(realpath "$0")")"
 source scripts/env.sh
 
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/hangar"
+notify() { notify-send -a Hangar -i "$PWD/hangar/static/icon.svg" "$@" 2>/dev/null || true; }
+
 # Abierto desde el menú no hay terminal: la salida va a un log y los errores
 # se avisan con una notificación del escritorio
 if [[ ! -t 1 ]]; then
-    log="${XDG_CACHE_HOME:-$HOME/.cache}/hangar/hangar.log"
-    mkdir -p "$(dirname "$log")"
+    log="$cache/hangar.log"
+    mkdir -p "$cache"
     exec >>"$log" 2>&1
     echo "--- $(date '+%F %T')"
-    notify() { notify-send -a Hangar -i "$PWD/hangar/static/icon.svg" "$@" 2>/dev/null || true; }
     fail() {
         echo "Error: $*"
         notify -u critical "Hangar no ha podido arrancar" "$* · Detalles en $log"
@@ -24,4 +26,19 @@ if [[ ! -t 1 ]]; then
 fi
 
 prepare_env requirements.txt requirements-desktop.txt
-exec .venv/bin/python -m hangar.desktop "$@"
+
+gpu=$(.venv/bin/python -c "from hangar.desktop import use_gpu; print(int(use_gpu()))")
+code=0
+.venv/bin/python -m hangar.desktop "$@" || code=$?
+
+# Muerte por una señal que no es de cierre normal (Ctrl+C = 130, kill = 143):
+# si tenía la GPU activa, se apunta y se vuelve a abrir sin ella
+if (( code > 128 && code != 130 && code != 143 )) && [[ "$gpu" == 1 && -z "${HANGAR_GPU:-}" ]]; then
+    echo "Hangar se cerró de golpe (código $code) con la GPU activa: se abre sin ella."
+    mkdir -p "$cache"
+    touch "$cache/no-gpu"
+    notify "Hangar se ha reabierto sin aceleración gráfica" \
+        "Se cerró de golpe usando la GPU. Para volver a probarla: rm $cache/no-gpu"
+    exec .venv/bin/python -m hangar.desktop "$@"
+fi
+exit "$code"

@@ -94,9 +94,11 @@ Y borra la carpeta `~/hangar`.
 - La consola se abre en su propia ventana; las exportaciones van a Descargas.
 - Atajos: F5 recarga, Alt+← / Alt+→ atrás y adelante, Ctrl+W cierra la ventana.
 - Abierta desde el menú, los mensajes van a `~/.cache/hangar/hangar.log`.
-- Usa el motor web sin aceleración por GPU (más estable en VMs y con algunos
-  drivers); `HANGAR_GPU=1 ./hangar-app` la activa. `HANGAR_DEBUG=1` muestra
-  cada página que carga.
+- Usa la GPU para dibujar (scroll a 60 fps; sin ella, por CPU, va a unos 35).
+  Sin tarjeta gráfica, como en una VM, va por CPU. Si Chromium se cae con la
+  GPU, `hangar-app` la vuelve a abrir sin ella y lo recuerda
+  (`~/.cache/hangar/no-gpu`; bórralo para volver a probar). `HANGAR_NO_GPU=1`
+  o `HANGAR_GPU=1` la fuerzan. `HANGAR_DEBUG=1` muestra cada página que carga.
 
 ## En el navegador
 

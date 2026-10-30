@@ -26,6 +26,23 @@ ICON = Path(__file__).resolve().parent / "static" / "icon.svg"
 LOG = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "hangar" / "server.log"
 
 
+# Lo crea ./hangar-app si Chromium se cae con la GPU: desde entonces, sin ella
+NO_GPU_MARK = LOG.parent / "no-gpu"
+
+
+def use_gpu() -> bool:
+    """Con GPU el scroll va a 60 fps (sin ella, por CPU, a unos 35). Se
+    desactiva sin pantalla real, sin tarjeta gráfica, si se pide
+    (HANGAR_NO_GPU=1) o si ya se cayó antes en este equipo; HANGAR_GPU=1 la fuerza."""
+    if os.environ.get("HANGAR_GPU"):
+        return True
+    if os.environ.get("HANGAR_NO_GPU") or NO_GPU_MARK.exists():
+        return False
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        return False   # sin pantalla, Chromium se caía al intentar usar la GPU
+    return any(Path("/dev/dri").glob("renderD*"))
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -72,9 +89,7 @@ def main() -> int:
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
 
-    # Sin aceleración por GPU salvo que se pida (HANGAR_GPU=1): la interfaz no la
-    # necesita y con algunos drivers (o en máquinas virtuales) Chromium se caía
-    if not os.environ.get("HANGAR_GPU"):
+    if not use_gpu():
         flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
         os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{flags} --disable-gpu".strip()
 
