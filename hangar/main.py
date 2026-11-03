@@ -1,6 +1,7 @@
 """Hangar: panel web para gestionar máquinas KVM, LXC y Docker del host."""
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import asdict
 from datetime import datetime
 from urllib.parse import quote
@@ -69,8 +70,8 @@ POWER_MESSAGES = {"start": "Arrancando…", "stop": "Apagando…",
                   "kill": "Apagado forzado.", "restart": "Reiniciando…"}
 
 TABS = {"info": "Características", "metrics": "Rendimiento", "network": "Red", "edit": "Modificar",
-        "snapshots": "Snapshots", "users": "Usuarios", "notes": "Descripción y notas",
-        "config": "Configuración", "delete": "Borrar"}
+        "disks": "Discos", "snapshots": "Snapshots", "users": "Usuarios",
+        "notes": "Descripción y notas", "config": "Configuración", "delete": "Borrar"}
 
 NO_MODULE = "_none"
 
@@ -204,7 +205,8 @@ def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
         raise HTTPException(404, str(e)) from e
 
     ctx = {"users": [], "fields": [], "plan": None, "snaps": [], "ifaces": [],
-           "iface_fields": [], "tab_error": None, "usage": None}
+           "iface_fields": [], "disks": [], "disk_fields": [], "tab_error": None,
+           "usage": None}
     try:
         if tab == "snapshots" and not driver.no_snapshots_reason:
             ctx["snaps"] = driver.snapshots(machine_id)
@@ -217,15 +219,26 @@ def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
             ctx["plan"] = driver.delete_plan(machine_id)
         elif tab == "network":
             ctx["ifaces"] = driver.interfaces(machine_id)
+            saved_ips = db.get_iface_ips(kind, machine_id)
+            for iface in ctx["ifaces"]:
+                iface.defined_ip = saved_ips.get(iface.key) or iface.defined_ip
             ctx["iface_fields"] = driver.interface_fields(machine_id)
         elif tab == "metrics" and machine.state == "running":
             ctx["usage"] = metrics.sample(kind, machine_id)
+        elif tab == "disks":
+            if driver.kind != "kvm":
+                ctx["tab_error"] = "Añadir discos solo está disponible para máquinas KVM."
+            else:
+                ctx["disks"] = driver.disks(machine_id)
+                ctx["disk_fields"] = driver.disk_fields(machine_id)
     except DriverError as e:
         ctx["tab_error"] = str(e)
 
+    visible_tabs = (TABS if kind == "kvm"
+                    else {key: label for key, label in TABS.items() if key != "disks"})
     return templates.TemplateResponse(request, "machine.html", ctx | {
         "m": machine, "meta": db.get_meta(kind, machine_id), "driver": driver,
-        "tab": tab if tab in TABS else "info", "tabs": TABS,
+        "tab": tab if tab in visible_tabs else "info", "tabs": visible_tabs,
         "default_snapshot_name": f"snap-{datetime.now():%Y%m%d-%H%M}",
         "msg": msg, "error": error,
     })
@@ -287,11 +300,52 @@ async def iface_ip(request: Request, kind: str, machine_id: str, iface: str):
 
     def work(log):
         driver.set_ip(machine_id, iface, values, log)
+        if values.get("mode") == "static":
+            db.save_iface_ip(kind, machine_id, iface, values.get("address", ""))
+        else:
+            db.save_iface_ip(kind, machine_id, iface, "")
         return machine_id
 
     job = jobs.submit(kind, f"Cambiar IP de {machine_name(driver, machine_id)} ({iface})",
                       work, "network")
     return RedirectResponse(f"/jobs/{job.id}", status_code=303)
+
+
+@app.post("/m/{kind}/{machine_id}/network/{iface}/defined-ip")
+def iface_defined_ip(kind: str, machine_id: str, iface: str, ip: str = Form("")):
+    driver = driver_or_404(kind)
+    try:
+        if iface not in {i.key for i in driver.interfaces(machine_id)}:
+            raise HTTPException(404, f"No existe la interfaz {iface}")
+    except DriverError as e:
+        return back(kind, machine_id, "network", error=str(e))
+
+    ip = ip.strip()
+    if ip:
+        try:
+            address = ipaddress.ip_interface(ip)
+        except ValueError:
+            return back(kind, machine_id, "network",
+                        error="IP configurada: escríbela como 10.0.0.5 o 10.0.0.5/24")
+        if address.version != 4:
+            return back(kind, machine_id, "network",
+                        error="IP configurada: de momento solo IPv4")
+    db.save_iface_ip(kind, machine_id, iface, ip)
+    return back(kind, machine_id, "network",
+                msg="IP configurada guardada." if ip else "IP configurada borrada.")
+
+
+# --- Discos ---------------------------------------------------------------
+
+@app.post("/m/{kind}/{machine_id}/disks/add")
+async def disk_add(request: Request, kind: str, machine_id: str):
+    driver = driver_or_404(kind)
+    values = {k: str(v) for k, v in (await request.form()).items()}
+    try:
+        notes = driver.add_disk(machine_id, values)
+    except DriverError as e:
+        return back(kind, machine_id, "disks", error=str(e))
+    return back(kind, machine_id, "disks", msg=" ".join(notes))
 
 
 # --- Snapshots ------------------------------------------------------------
@@ -347,6 +401,7 @@ async def delete(request: Request, kind: str, machine_id: str):
     except DriverError as e:
         return back(kind, machine_id, "delete", error=str(e))
     db.delete_meta(kind, machine_id)
+    db.delete_iface_ips(kind, machine_id)
     return RedirectResponse(f"/?msg={quote(' '.join(notes))}", status_code=303)
 
 

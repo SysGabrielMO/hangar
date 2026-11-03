@@ -14,6 +14,7 @@ from docker.errors import DockerException
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
+from . import db
 from .common import list_all, templates
 from .drivers import DRIVERS, DriverError
 from .drivers.base import host_bridges
@@ -115,11 +116,14 @@ def collect():
             ifaces = DRIVERS[m.kind].interfaces(m.id)
         except DriverError:
             continue
+        saved_ips = db.get_iface_ips(m.kind, m.id)
         for i in ifaces:
+            i.defined_ip = saved_ips.get(i.key) or i.defined_ip
             # KVM indica la red libvirt; LXC indica el bridge
             target = by_name.get(i.network) or by_bridge.get(i.network) or bridges.get(i.network)
             if target is not None:
-                target.members.append((m.kind, m.id, m.name, i.ips))
+                ips = i.ips or ([i.defined_ip] if i.defined_ip else [])
+                target.members.append((m.kind, m.id, m.name, ips))
     return libvirt_nets, list(bridges.values()), docker_nets, errors
 
 

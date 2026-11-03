@@ -321,6 +321,7 @@ class LxcDriver(Driver):
                 model=f"net.{idx} ({n.get('type', '?')})",
                 # lxc-info da las IPs del contenedor sin decir de qué interfaz son
                 ips=m.ips if len(nets) == 1 else [],
+                defined_ip=static or "",
                 ip_config=(f"estática {static}" + (f", gateway {n['ipv4.gateway']}"
                                                    if n.get("ipv4.gateway") else "")
                            if static else "la que asigne el contenedor (normalmente DHCP)"),

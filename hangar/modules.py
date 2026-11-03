@@ -174,12 +174,17 @@ def export_module(module: str):
             ifaces = driver.interfaces(m.id)
         except DriverError:
             ifaces = []
+        saved_ips = db.get_iface_ips(m.kind, m.id)
+        for iface in ifaces:
+            iface.defined_ip = saved_ips.get(iface.key) or iface.defined_ip
         if ifaces:
             details += ["**Red**", ""]
-            details += [f"- {i.network}"
-                        + (f" · MAC `{i.mac}`" if i.mac else "")
-                        + (f" · IP {', '.join(i.ips)}" if i.ips else "")
-                        + f" · {i.ip_config}" for i in ifaces]
+            for iface in ifaces:
+                ips = iface.ips or ([iface.defined_ip] if iface.defined_ip else [])
+                details.append(f"- {iface.network}"
+                               + (f" · MAC `{iface.mac}`" if iface.mac else "")
+                               + (f" · IP {', '.join(ips)}" if ips else "")
+                               + f" · {iface.ip_config}")
             details.append("")
         if meta.notes:
             details += ["**Notas**", "", meta.notes, ""]

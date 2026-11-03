@@ -259,6 +259,11 @@ La página **Redes** muestra todas las redes libvirt, bridges y redes Docker
 con las máquinas e IPs de cada una, y permite crear redes libvirt (NAT o
 aisladas, con o sin DHCP) y redes Docker.
 
+En la pestaña **Red** de la máquina puedes **anotar la IP configurada** de cada
+interfaz. Se muestra aunque la máquina esté apagada, junto a las reservas DHCP
+de libvirt y las IPs estáticas de LXC. Al cambiar una IP estática desde Hangar
+también se guarda sola.
+
 ## Crear máquinas
 
 Botón **+ Nueva máquina**. La creación corre en segundo plano y abre una
@@ -269,9 +274,19 @@ Hangar se pierde el registro, no la máquina).
   arranca y la instalas con virt-manager/virt-viewer) o `virt-clone` (la VM
   origen debe estar apagada). Si osinfo no detecta la ISO, indica el sistema
   (p. ej. `debian13`, `win11`) para que elija los dispositivos adecuados.
+  El formulario admite **varios discos** (`20:default:qcow2`, uno por línea) y
+  **varias redes** (`default:virtio`, una por línea).
 - **LXC**: `lxc-create -t download`; la lista de imágenes se lee del servidor
   de linuxcontainers.org.
 - **Docker**: si la imagen no está, se descarga antes de crear.
+
+## Discos (KVM)
+
+La pestaña **Discos** de una VM lista sus discos y permite **añadir uno**:
+tamaño en GiB, pool activo, formato (qcow2/raw) y bus (virtio/SCSI/SATA). Se
+crea un volumen nuevo en el pool y se conecta en caliente si la VM lo admite;
+si no, queda en la configuración para el próximo arranque. El disco se crea
+vacío: después hay que formatearlo y montarlo dentro de la VM.
 
 ## Problemas frecuentes
 
@@ -344,7 +359,8 @@ consolas. GitHub Actions las ejecuta en cada push y pull request
 - [x] Añadir/quitar interfaces y cambiar IPs; página de redes
 - [x] Panel de capacidad del host, aviso antes de encender un módulo que no
       cabe y acciones de arranque/parada por fila
-- [ ] Añadir/quitar discos
+- [x] Añadir discos a una VM KVM
+- [ ] Quitar discos
 - [x] Borrar, con plan de lo que se borra/conserva y confirmación escribiendo
       el nombre (KVM no borra ISOs ni discos que use otra VM)
 - [x] Snapshots: crear, listar, volver y borrar (KVM internos, con memoria si

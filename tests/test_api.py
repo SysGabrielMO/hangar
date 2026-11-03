@@ -1,7 +1,8 @@
 import pytest
 
 from hangar import db, jobs, main
-from hangar.drivers.base import Machine
+from hangar.drivers import DRIVERS
+from hangar.drivers.base import Interface, Machine
 
 
 @pytest.fixture
@@ -76,3 +77,27 @@ def test_csrf_rejected(client):
     response = client.post("/m/kvm/vm-1/stop",
                            headers={"origin": "http://evil.example"})
     assert response.status_code == 403
+
+
+def test_defined_ip_saved_and_validated(client, monkeypatch):
+    saved = []
+
+    class FakeDriver:
+        kind = "fake"
+
+        def interfaces(self, machine_id):
+            return [Interface(key="mac-1", network="red-privada")]
+
+    monkeypatch.setitem(DRIVERS, "fake", FakeDriver())
+    monkeypatch.setattr(db, "save_iface_ip",
+                        lambda kind, machine_id, iface, ip: saved.append(ip))
+
+    response = client.post("/m/fake/vm-1/network/mac-1/defined-ip",
+                           data={"ip": "10.10.100.50/24"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert saved == ["10.10.100.50/24"]
+
+    response = client.post("/m/fake/vm-1/network/mac-1/defined-ip",
+                           data={"ip": "no-es-ip"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert saved == ["10.10.100.50/24"]

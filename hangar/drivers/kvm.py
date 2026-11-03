@@ -16,11 +16,13 @@ from datetime import datetime
 
 import libvirt
 
-from .base import (SNAPSHOT_NAME_RE, DeletePlan, Driver, DriverError, Field, Interface, Machine,
-                   Snapshot, Usage, User, check_name, host_bridges, human_bytes, parse_ip_request,
-                   parse_number, parse_passwd, run_streaming)
+from .base import (SNAPSHOT_NAME_RE, DeletePlan, Disk, Driver, DriverError, Field, Interface,
+                   Machine, Snapshot, Usage, User, check_name, host_bridges, human_bytes,
+                   parse_ip_request, parse_number, parse_passwd, run_streaming)
 
 GIB = 1024 ** 3
+DISK_FORMATS = ("qcow2", "raw")
+NETWORK_MODELS = ("virtio", "e1000e", "rtl8139")
 # Config persistente (no la de ejecución) y sin ocultar contraseñas VNC/SPICE,
 # porque este XML se vuelve a guardar con defineXML.
 XML_FLAGS = libvirt.VIR_DOMAIN_XML_INACTIVE | libvirt.VIR_DOMAIN_XML_SECURE
@@ -200,6 +202,53 @@ STATES = {
     libvirt.VIR_DOMAIN_SHUTOFF: "stopped",
     libvirt.VIR_DOMAIN_CRASHED: "stopped",
 }
+
+
+def _parse_disks(text: str, pools: set[str], default_pool: str) -> list[dict]:
+    """'20:default:qcow2' por línea → discos validados."""
+    disks = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [part.strip() for part in line.split(":")]
+        if len(parts) > 3:
+            raise DriverError(f"Disco no válido: «{line}» (usa tamaño[:pool[:formato]])")
+        try:
+            size = int(float(parts[0]))
+        except ValueError:
+            raise DriverError(f"Disco «{line}»: el tamaño no es un número") from None
+        if size < 1:
+            raise DriverError(f"Disco «{line}»: el tamaño mínimo es 1 GiB")
+        pool = parts[1] if len(parts) > 1 and parts[1] else default_pool
+        fmt = parts[2] if len(parts) > 2 and parts[2] else "qcow2"
+        if pool not in pools:
+            raise DriverError(f"Disco «{line}»: no existe el pool «{pool}»")
+        if fmt not in DISK_FORMATS:
+            raise DriverError(f"Disco «{line}»: formato no válido (qcow2 o raw)")
+        disks.append({"size_gib": size, "pool": pool, "format": fmt})
+    if not disks:
+        raise DriverError("Añade al menos un disco.")
+    return disks
+
+
+def _parse_networks(text: str, networks: set[str]) -> list[dict]:
+    """'red[:modelo]' por línea → redes validadas."""
+    result = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [part.strip() for part in line.split(":", 1)]
+        network = parts[0]
+        model = parts[1] if len(parts) > 1 and parts[1] else "virtio"
+        if network not in networks:
+            raise DriverError(f"Red «{network}»: no existe esa red de libvirt")
+        if model not in NETWORK_MODELS:
+            raise DriverError(f"Red «{network}»: modelo no válido "
+                              f"({', '.join(NETWORK_MODELS)})")
+        result.append({"network": network, "model": model})
+    return result
 
 
 class KvmDriver(Driver):
@@ -406,6 +455,145 @@ class KvmDriver(Driver):
             disks.append((target.get("dev"), path, capacity))
         return disks
 
+    def disks(self, machine_id: str) -> list[Disk]:
+        conn = self._conn()
+        try:
+            dom = self._domain(conn, machine_id)
+            root = ET.fromstring(dom.XMLDesc(XML_FLAGS))
+            active = dom.isActive()
+            result = []
+            for d in root.findall("devices/disk[@device='disk']"):
+                src, target = d.find("source"), d.find("target")
+                if target is None:
+                    continue
+                path = src.get("file") or src.get("dev") if src is not None else ""
+                if not path and src is not None and src.get("volume"):
+                    try:
+                        path = conn.storagePoolLookupByName(src.get("pool")) \
+                            .storageVolLookupByName(src.get("volume")).path()
+                    except libvirt.libvirtError:
+                        pass
+                drv = d.find("driver")
+                size = 0
+                if active:
+                    try:
+                        size = dom.blockInfo(target.get("dev"))[0]
+                    except libvirt.libvirtError:
+                        pass
+                if not size and path:
+                    try:
+                        size = conn.storageVolLookupByPath(path).info()[1]
+                    except libvirt.libvirtError:
+                        try:
+                            size = os.path.getsize(path)
+                        except OSError:
+                            pass
+                result.append(Disk(target=target.get("dev", "?"), path=path or "(vacío)",
+                                   size=size, format=drv.get("type", "") if drv is not None else "",
+                                   bus=target.get("bus", "")))
+            return result
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _next_disk_target(root: ET.Element, bus: str) -> str:
+        used = {el.get("dev") for el in root.findall("devices/disk/target")}
+        prefix = "vd" if bus == "virtio" else "sd"
+        for code in range(ord("a"), ord("z") + 1):
+            target = prefix + chr(code)
+            if target not in used:
+                return target
+        raise DriverError("No quedan letras libres para otro disco (máximo 26).")
+
+    def disk_fields(self, machine_id: str) -> list[Field]:
+        conn = self._conn()
+        try:
+            pools = self._pool_names(conn)
+        finally:
+            conn.close()
+        default = "default" if "default" in pools else (pools[0] if pools else "")
+        return [
+            Field("size_gib", "Tamaño (GiB)", "20", "number", min=1),
+            Field("pool", "Pool de almacenamiento", default, "select",
+                  options=[(p, p) for p in pools],
+                  help="El volumen se crea en este pool; debe estar activo."),
+            Field("format", "Formato", "qcow2", "select", options=[
+                ("qcow2", "qcow2 (recomendado)"), ("raw", "raw")]),
+            Field("bus", "Bus", "virtio", "select", options=[
+                ("virtio", "virtio (recomendado)"), ("scsi", "SCSI"), ("sata", "SATA")]),
+        ]
+
+    def add_disk(self, machine_id: str, values: dict[str, str]) -> list[str]:
+        size = int(parse_number(values, "size_gib", "Tamaño", minimum=1))
+        pool_name = values.get("pool", "")
+        fmt = values.get("format", "qcow2")
+        bus = values.get("bus", "virtio")
+        if fmt not in DISK_FORMATS:
+            raise DriverError("Formato de disco no válido.")
+        if bus not in ("virtio", "scsi", "sata"):
+            raise DriverError("Bus de disco no válido.")
+        conn = self._conn()
+        vol = None
+        try:
+            dom = self._domain(conn, machine_id)
+            try:
+                pool = conn.storagePoolLookupByName(pool_name)
+            except libvirt.libvirtError as e:
+                raise DriverError(f"No existe el pool «{pool_name}»") from e
+            if not pool.isActive():
+                raise DriverError(f"El pool «{pool_name}» no está activo.")
+            pool.refresh(0)
+            root = ET.fromstring(dom.XMLDesc(XML_FLAGS))
+            target_dev = self._next_disk_target(root, bus)
+
+            existing = {v.name() for v in pool.listAllVolumes()}
+            index = len(root.findall("devices/disk[@device='disk']")) + 1
+            name = f"{dom.name()}-disco{index}.{fmt}"
+            while name in existing:
+                index += 1
+                name = f"{dom.name()}-disco{index}.{fmt}"
+
+            volume_xml = ET.Element("volume")
+            ET.SubElement(volume_xml, "name").text = name
+            ET.SubElement(volume_xml, "capacity", unit="GiB").text = str(size)
+            ET.SubElement(volume_xml, "allocation", unit="GiB").text = "0"
+            target_el = ET.SubElement(volume_xml, "target")
+            ET.SubElement(target_el, "format", type=fmt)
+            vol = pool.createXML(ET.tostring(volume_xml, encoding="unicode"), 0)
+            path = vol.path()
+            try:
+                block = vol.info()[0] == 1
+            except libvirt.libvirtError:
+                block = False
+
+            disk = ET.Element("disk", type="block" if block else "file", device="disk")
+            ET.SubElement(disk, "driver", name="qemu", type=fmt)
+            ET.SubElement(disk, "source", **({"dev": path} if block else {"file": path}))
+            ET.SubElement(disk, "target", dev=target_dev, bus=bus)
+            xml = ET.tostring(disk, encoding="unicode")
+            note = "."
+            if dom.isActive():
+                try:
+                    dom.attachDeviceFlags(xml, libvirt.VIR_DOMAIN_AFFECT_CONFIG
+                                          | libvirt.VIR_DOMAIN_AFFECT_LIVE)
+                    note = ", conectado en caliente."
+                except libvirt.libvirtError:
+                    dom.attachDeviceFlags(xml, libvirt.VIR_DOMAIN_AFFECT_CONFIG)
+                    note = (": la VM no admite añadirlo en caliente; aparecerá al "
+                            "apagarla y volver a arrancarla.")
+            else:
+                dom.attachDeviceFlags(xml, libvirt.VIR_DOMAIN_AFFECT_CONFIG)
+            return [f"Disco {target_dev} añadido: {path} ({size} GiB){note}"]
+        except libvirt.libvirtError as e:
+            if vol is not None:
+                try:
+                    vol.delete(0)
+                except libvirt.libvirtError:
+                    pass
+            raise DriverError(str(e)) from e
+        finally:
+            conn.close()
+
     def editable(self, machine_id: str) -> list[Field]:
         conn = self._conn()
         try:
@@ -492,6 +680,14 @@ class KvmDriver(Driver):
 
     # --- Crear -----------------------------------------------------------
 
+    @staticmethod
+    def _pool_names(conn) -> list[str]:
+        try:
+            pools = conn.listAllStoragePools(libvirt.VIR_CONNECT_LIST_STORAGE_POOLS_ACTIVE)
+        except libvirt.libvirtError:
+            return []
+        return sorted(pool.name() for pool in pools)
+
     def _isos(self, conn) -> list[tuple[str, str]]:
         """(ruta, nombre) de las ISOs de todos los pools activos."""
         isos = []
@@ -522,39 +718,44 @@ class KvmDriver(Driver):
             origins += [(f"clone:{d.name()}", f"Clonar · {d.name()}")
                         for d in sorted(conn.listAllDomains(), key=lambda d: d.name())]
             networks = sorted(n.name() for n in conn.listAllNetworks())
+            pools = self._pool_names(conn)
         finally:
             conn.close()
+        default_pool = "default" if "default" in pools else (pools[0] if pools else "default")
+        default_network = "default" if "default" in networks else (networks[0] if networks else "")
         return [
             Field("name", "Nombre", "", required=True, placeholder="srv-nuevo"),
             Field("origin", "Origen", "", "select", options=origins,
                   help="Instalar desde una ISO o clonar una VM existente (debe estar apagada). "
-                       "Al clonar se ignoran el disco y el sistema."),
+                       "Al clonar se conservan sus discos y redes."),
             Field("osinfo", "Sistema operativo (osinfo)", "", suggestions=self._osinfo_ids(),
                   placeholder="autodetectar",
                   help="Vacío = detectarlo de la ISO. Para Windows pon p. ej. win11."),
             Field("vcpus", "vCPU", "2", "number", min=1, step=1),
             Field("memory_mib", "Memoria (MiB)", "2048", "number", min=64),
-            Field("disk_gib", "Disco (GiB)", "20", "number", min=1,
-                  help="Se crea en el pool «default» en formato qcow2."),
-            Field("network", "Red", "default" if "default" in networks else "", "select",
-                  options=[(n, n) for n in networks]),
+            Field("disks", "Discos (uno por línea)", f"20:{default_pool}:qcow2", "textarea",
+                  placeholder="20:default:qcow2\n50:default:qcow2",
+                  help="tamaño_GiB[:pool[:formato]]. La primera línea es el disco del sistema. "
+                       f"Pools activos: {', '.join(pools) or 'ninguno'}. Formatos: qcow2, raw."),
+            Field("networks", "Redes (una por línea)", f"{default_network}:virtio" if default_network else "",
+                  "textarea", placeholder="default:virtio\nred-privada:e1000e",
+                  help="red[:modelo]. La primera es la red principal; deja el campo vacío para "
+                       "crear la VM sin red. Modelos: virtio, e1000e, rtl8139."),
         ]
 
     def prepare_create(self, values: dict[str, str]) -> dict:
         conn = self._conn()
         try:
             existing = [d.name() for d in conn.listAllDomains()]
-            networks = [n.name() for n in conn.listAllNetworks()]
+            networks = {n.name() for n in conn.listAllNetworks()}
+            pools = set(self._pool_names(conn))
+            default_pool = "default" if "default" in pools else (sorted(pools)[0] if pools else "default")
             spec = {
                 "name": check_name(values, existing),
                 "vcpus": parse_number(values, "vcpus", "vCPU", minimum=1),
                 "memory_mib": parse_number(values, "memory_mib", "Memoria", minimum=64),
-                "disk_gib": parse_number(values, "disk_gib", "Disco", minimum=1),
-                "network": values.get("network", ""),
                 "osinfo": values.get("osinfo", "").strip(),
             }
-            if spec["network"] not in networks:
-                raise DriverError("Elige una red.")
             if spec["osinfo"] and spec["osinfo"] not in self._osinfo_ids():
                 raise DriverError(f"Sistema «{spec['osinfo']}» desconocido para osinfo.")
 
@@ -562,10 +763,15 @@ class KvmDriver(Driver):
             kind, _, target = origin.partition(":")
             if kind == "iso" and target in [p for p, _ in self._isos(conn)]:
                 spec["iso"] = target
+                spec["disks"] = _parse_disks(values.get("disks", ""), pools, default_pool)
+                spec["networks"] = _parse_networks(values.get("networks", ""), networks)
             elif kind == "clone" and target in existing:
                 if conn.lookupByName(target).isActive():
                     raise DriverError(f"Apaga «{target}» antes de clonarla.")
+                # El clon conserva discos y redes de la original.
                 spec["clone"] = target
+                spec["disks"] = []
+                spec["networks"] = []
             else:
                 raise DriverError("Elige una ISO o una VM para clonar.")
             return spec
@@ -577,6 +783,8 @@ class KvmDriver(Driver):
         if "clone" in spec:
             run_streaming(["virt-clone", "--connect", self.uri, "--original", spec["clone"],
                            "--name", name, "--auto-clone"], log)
+            log("Se conservan los discos y las redes de la VM original; "
+                "puedes añadir más desde las pestañas Discos y Red.")
             conn = self._conn()
             try:
                 uuid = conn.lookupByName(name).UUIDString()
@@ -588,16 +796,20 @@ class KvmDriver(Driver):
             return uuid
 
         osinfo = f"name={spec['osinfo']}" if spec["osinfo"] else "detect=on,require=off"
-        run_streaming([
+        command = [
             "virt-install", "--connect", self.uri, "--name", name,
             "--vcpus", str(spec["vcpus"]), "--memory", str(spec["memory_mib"]),
-            # Sin forzar bus ni modelo: virt-install elige según osinfo
+        ]
+        for disk in spec["disks"]:
+            # Sin forzar bus: virt-install elige según osinfo
             # (virtio para Linux, SATA/e1000e para Windows…)
-            "--disk", f"pool=default,size={spec['disk_gib']},format=qcow2",
-            "--cdrom", spec["iso"], "--osinfo", osinfo,
-            "--network", f"network={spec['network']}",
-            "--graphics", "spice", "--noautoconsole",
-        ], log)
+            command += ["--disk", f"pool={disk['pool']},size={disk['size_gib']},"
+                                  f"format={disk['format']}"]
+        command += ["--cdrom", spec["iso"], "--osinfo", osinfo]
+        for network in spec["networks"]:
+            command += ["--network", f"network={network['network']},model={network['model']}"]
+        command += ["--graphics", "spice", "--noautoconsole"]
+        run_streaming(command, log)
         log("VM creada y arrancada desde la ISO: conéctate con virt-manager o "
             "virt-viewer para hacer la instalación.")
         conn = self._conn()
@@ -725,6 +937,7 @@ class KvmDriver(Driver):
                     reserved = next((h.get("ip") for h in ip_el.findall("host")
                                      if (h.get("mac") or "").lower() == mac), None)
                     iface.dhcp = True
+                    iface.defined_ip = reserved or ""
                     iface.ip_config = (f"DHCP de libvirt, reserva fija {reserved}" if reserved
                                        else "DHCP de libvirt")
                     iface.set_ip_hint = (f"Se crea una reserva DHCP en «{network}»"

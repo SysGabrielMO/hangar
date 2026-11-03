@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS meta (
     updated_at  TEXT NOT NULL,
     PRIMARY KEY (kind, id)
 );
+
+CREATE TABLE IF NOT EXISTS iface_ip (
+    kind       TEXT NOT NULL,
+    id         TEXT NOT NULL,
+    iface      TEXT NOT NULL,
+    ip         TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (kind, id, iface)
+);
 """
 # Columnas añadidas después; se crean solas en bases de datos antiguas
 MIGRATIONS = {"module": "ALTER TABLE meta ADD COLUMN module TEXT NOT NULL DEFAULT ''"}
@@ -55,7 +64,7 @@ def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute(SCHEMA)
+    conn.executescript(SCHEMA)
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(meta)")}
     for column, sql in MIGRATIONS.items():
         if column not in columns:
@@ -83,6 +92,37 @@ def get_meta(kind: str, machine_id: str) -> Meta:
 def delete_meta(kind: str, machine_id: str) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM meta WHERE kind = ? AND id = ?", (kind, machine_id))
+
+
+def get_iface_ips(kind: str, machine_id: str) -> dict[str, str]:
+    """IPs configuradas a mano o por Hangar, indexadas por MAC/índice."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT iface, ip FROM iface_ip WHERE kind = ? AND id = ?",
+            (kind, machine_id)).fetchall()
+    return {r["iface"]: r["ip"] for r in rows if r["ip"]}
+
+
+def save_iface_ip(kind: str, machine_id: str, iface: str, ip: str) -> None:
+    ip = ip.strip()
+    with _connect() as conn:
+        if ip:
+            conn.execute(
+                """INSERT INTO iface_ip (kind, id, iface, ip, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT (kind, id, iface) DO UPDATE SET
+                     ip = excluded.ip, updated_at = excluded.updated_at""",
+                (kind, machine_id, iface, ip,
+                 datetime.now().isoformat(timespec="seconds")),
+            )
+        else:
+            conn.execute("DELETE FROM iface_ip WHERE kind = ? AND id = ? AND iface = ?",
+                         (kind, machine_id, iface))
+
+
+def delete_iface_ips(kind: str, machine_id: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM iface_ip WHERE kind = ? AND id = ?", (kind, machine_id))
 
 
 def save_meta(kind: str, machine_id: str, description: str, notes: str, tags: str,

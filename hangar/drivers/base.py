@@ -96,6 +96,17 @@ class Interface:
     dhcp: bool = False        # la red le da IP por DHCP (se cambia con reserva)
     can_set_ip: bool = True
     set_ip_hint: str = ""     # cómo se aplicará el cambio de IP
+    defined_ip: str = ""      # IP anotada/estática, visible aunque esté apagada
+
+
+@dataclass
+class Disk:
+    """Un disco de la máquina (KVM)."""
+    target: str
+    path: str
+    size: int = 0             # bytes; 0 = desconocido
+    format: str = ""
+    bus: str = ""
 
 
 @dataclass
@@ -158,6 +169,17 @@ class Driver:
     def delete_plan(self, machine_id: str) -> DeletePlan:
         """Qué se borraría y qué se conservaría (para enseñarlo antes)."""
         raise NotImplementedError
+
+    def disks(self, machine_id: str) -> list[Disk]:
+        """Discos de la máquina (solo KVM por ahora)."""
+        raise DriverError("Añadir discos solo está disponible para máquinas KVM.")
+
+    def disk_fields(self, machine_id: str) -> list[Field]:
+        """Formulario para añadir un disco."""
+        raise DriverError("Añadir discos solo está disponible para máquinas KVM.")
+
+    def add_disk(self, machine_id: str, values: dict[str, str]) -> list[str]:
+        raise DriverError("Añadir discos solo está disponible para máquinas KVM.")
 
     def delete(self, machine_id: str, values: dict[str, str]) -> list[str]:
         """Borra la máquina (debe estar apagada) según las opciones del plan."""

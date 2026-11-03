@@ -404,6 +404,7 @@ class DockerDriver(Driver):
                     key=name, network=name, mac=n.get("MacAddress") or "",
                     ips=[f"{n['IPAddress']}/{n.get('IPPrefixLen')}"] if n.get("IPAddress") else [],
                     ip_config=f"fija {fixed}" if fixed else "automática (IPAM de Docker)",
+                    defined_ip=fixed or "",
                     can_set_ip=not builtin,
                     set_ip_hint=("Docker solo permite IP fija en redes creadas por ti "
                                  "(con subred definida)." if builtin else

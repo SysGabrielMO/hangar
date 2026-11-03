@@ -130,7 +130,8 @@
         <strong>{{ i.network }}</strong>
         <span class="muted small mono">{{ i.mac }}{% if i.model %} · {{ i.model }}{% endif %}</span>
         <div class="small">
-          IP: <span class="mono">{{ i.ips | join(", ") or ("—" if m.state == "running" else "apagada") }}</span>
+          IP: <span class="mono">{{ i.ips | join(", ") or i.defined_ip or ("—" if m.state == "running" else "apagada") }}</span>
+          {% if i.defined_ip %}<span class="tag current" title="IP anotada en Hangar o reserva de la red">configurada</span>{% endif %}
           <span class="muted">· {{ i.ip_config }}</span>
         </div>
       </div>
@@ -139,6 +140,14 @@
         <button class="btn small danger subtle">Quitar</button>
       </form>
     </div>
+    <details class="ip-form">
+      <summary>{{ ("IP configurada: " ~ i.defined_ip) if i.defined_ip else "Anotar IP configurada" }}</summary>
+      <form method="post" action="{{ base_url }}/network/{{ i.key | urlencode }}/defined-ip" class="inline-form">
+        <label>IP / máscara <input name="ip" value="{{ i.defined_ip }}" placeholder="10.0.0.5/24"></label>
+        <button class="btn small">Guardar</button>
+      </form>
+      <p class="muted small">Se muestra aunque la máquina esté apagada. Déjalo vacío para borrarla.</p>
+    </details>
     {% if i.can_set_ip %}
     <details class="ip-form">
       <summary>Cambiar IP</summary>
@@ -190,6 +199,44 @@
     {% if m.kind == "kvm" and m.state == "running" %}
     <span class="muted">La VM está encendida: CPU y memoria se aplican en el próximo arranque.</span>
     {% endif %}
+  </div>
+</form>
+{% endif %}
+
+{% elif tab == "disks" %}
+{% if tab_error %}
+<div class="alert error">{{ tab_error }}</div>
+{% else %}
+<section class="card">
+  <h2>Discos ({{ disks | length }})</h2>
+  {% if disks %}
+  <div class="table-wrap flat">
+  <table class="snapshots">
+    <thead><tr><th>Dispositivo</th><th>Tamaño</th><th>Formato</th><th>Ruta</th></tr></thead>
+    <tbody>
+    {% for d in disks %}
+      <tr>
+        <td class="name"><strong>{{ d.target }}</strong>{% if d.bus %} <span class="tag">{{ d.bus }}</span>{% endif %}</td>
+        <td class="nowrap">{{ d.size | human if d.size else "—" }}</td>
+        <td class="muted">{{ d.format or "—" }}</td>
+        <td class="mono small">{{ d.path }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No hay discos de datos.</p>
+  {% endif %}
+</section>
+
+<form class="card edit-form" method="post" action="{{ base_url }}/disks/add"
+      data-confirm="¿Crear y conectar el disco? Pulsa otra vez">
+  <h2>Añadir disco</h2>
+  {{ render_fields(disk_fields) }}
+  <div class="form-foot">
+    <button class="btn primary">Crear y conectar</button>
+    <span class="muted small">Se crea vacío: luego tienes que formatearlo y montarlo dentro de la VM.</span>
   </div>
 </form>
 {% endif %}
