@@ -312,9 +312,10 @@ class KvmDriver(Driver):
                 stats = dom.memoryStats()
             except libvirt.libvirtError:
                 pass
-            mem_used = int(stats.get("rss") or stats.get("actual") or info[2] * 1024)
+            # libvirt devuelve memoriaStats y dom.info() en KiB, no en bytes.
+            mem_kib = stats.get("rss") or stats.get("actual") or info[2]
             return Usage(state=state, cpu_time=info[4] / 1e9,
-                         mem_used=mem_used, mem_limit=info[1] * 1024)
+                         mem_used=int(mem_kib) * 1024, mem_limit=info[1] * 1024)
         finally:
             conn.close()
 
