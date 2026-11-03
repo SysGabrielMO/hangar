@@ -11,7 +11,7 @@ import subprocess
 import time
 
 from .base import (SNAPSHOT_NAME_RE, DeletePlan, Driver, DriverError, Field, Interface, Machine,
-                   Snapshot, User, check_name, host_bridges, human_bytes, parse_ip_request,
+                   Snapshot, Usage, User, check_name, host_bridges, human_bytes, parse_ip_request,
                    parse_number, parse_passwd, run_streaming)
 
 HELPER = "/usr/local/sbin/hangar-lxc-helper"
@@ -42,6 +42,22 @@ def _memory_mib(value: str) -> int:
 STATES = {"RUNNING": "running", "STOPPED": "stopped", "FROZEN": "paused"}
 
 
+def _parse_seconds(value: str) -> float:
+    """'1.23s' o '1.23 seconds' → 1.23."""
+    m = re.search(r"([\d.]+)", value or "")
+    return float(m[1]) if m else 0.0
+
+
+def _parse_size(value: str) -> int:
+    """'12.34 MiB' → bytes."""
+    m = re.match(r"\s*([\d.]+)\s*([KMGTP]?i?B)", value or "")
+    if not m:
+        return 0
+    factor = {"B": 1, "KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3,
+              "TiB": 1024 ** 4, "PiB": 1024 ** 5}
+    return int(float(m[1]) * factor.get(m[2], 1))
+
+
 class LxcDriver(Driver):
     kind = "lxc"
     label = "LXC"
@@ -70,6 +86,16 @@ class LxcDriver(Driver):
         if not machines:
             raise DriverError(f"No existe el contenedor {machine_id}")
         return machines[0]
+
+    def usage(self, machine_id: str) -> Usage:
+        m = self.get(machine_id)
+        if m.state != "running":
+            return Usage(state=m.state)
+        resources = dict(m.sections.get("Recursos", []))
+        return Usage(state=m.state,
+                     cpu_time=_parse_seconds(resources.get("Uso de CPU", "")),
+                     mem_used=_parse_size(resources.get("Uso de memoria", "")),
+                     mem_limit=m.memory_mib * 2**20)
 
     def _parse_dump(self, text: str) -> list[Machine]:
         machines = []

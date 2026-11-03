@@ -17,7 +17,7 @@ from datetime import datetime
 import libvirt
 
 from .base import (SNAPSHOT_NAME_RE, DeletePlan, Driver, DriverError, Field, Interface, Machine,
-                   Snapshot, User, check_name, host_bridges, human_bytes, parse_ip_request,
+                   Snapshot, Usage, User, check_name, host_bridges, human_bytes, parse_ip_request,
                    parse_number, parse_passwd, run_streaming)
 
 GIB = 1024 ** 3
@@ -296,6 +296,25 @@ class KvmDriver(Driver):
             graphics = root.find("devices/graphics")
             m.display = graphics.get("type") if graphics is not None else ""
             return m
+        finally:
+            conn.close()
+
+    def usage(self, machine_id: str) -> Usage:
+        conn = self._conn()
+        try:
+            dom = self._domain(conn, machine_id)
+            info = dom.info()
+            state = STATES.get(info[0], "unknown")
+            if state != "running":
+                return Usage(state=state)
+            stats = {}
+            try:
+                stats = dom.memoryStats()
+            except libvirt.libvirtError:
+                pass
+            mem_used = int(stats.get("rss") or stats.get("actual") or info[2] * 1024)
+            return Usage(state=state, cpu_time=info[4] / 1e9,
+                         mem_used=mem_used, mem_limit=info[1] * 1024)
         finally:
             conn.close()
 

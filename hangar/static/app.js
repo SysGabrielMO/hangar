@@ -193,3 +193,146 @@ if (document.querySelector("tr[data-key]")) {
     if (!document.hidden) refreshStatus();
   });
 }
+
+// --- Pestaña Rendimiento --------------------------------------------------
+
+function cssVar(name, fallback) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+function drawSpark(canvas, values, maxValue, color) {
+  if (!canvas) return;
+  const width = Math.max(canvas.clientWidth, 1);
+  const height = Math.max(canvas.clientHeight, 1);
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  ctx.strokeStyle = cssVar("--border", "#e3e6ea");
+  ctx.lineWidth = 1;
+  for (const fraction of [0.25, 0.5, 0.75]) {
+    const y = Math.round(height * fraction) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+  if (!values.length) return;
+
+  const max = Math.max(maxValue, 0.001);
+  const step = values.length > 1 ? width / (values.length - 1) : width;
+  const yOf = (value) => height - Math.min(Math.max(value / max, 0), 1) * (height - 4) - 2;
+
+  ctx.beginPath();
+  values.forEach((value, index) => {
+    const x = values.length > 1 ? index * step : 0;
+    const y = yOf(value);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.stroke();
+
+  if (values.length < 2) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(1, yOf(values[0]), 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function initMetrics() {
+  const card = document.querySelector("[data-metrics-url]");
+  if (!card) return;
+
+  const cpuChart = document.getElementById("metric-cpu-chart");
+  const memChart = document.getElementById("metric-mem-chart");
+  const cpuValue = document.getElementById("metric-cpu");
+  const memValue = document.getElementById("metric-mem");
+  const memNote = document.getElementById("metric-mem-note");
+  const updated = document.getElementById("metrics-updated");
+  const cpuValues = [];
+  const memValues = [];
+  let memPercent = card.dataset.memLimit === "1";
+  let stopped = false;
+  let timer = null;
+
+  // La primera muestra viene ya renderizada desde el servidor: así la pestaña
+  // no aparece vacía mientras llega el primer fetch.
+  try {
+    const initial = JSON.parse(document.getElementById("metric-history")?.textContent || "[]");
+    cpuValues.push(...initial.map((point) => point.cpu));
+    memValues.push(...initial.map((point) => (
+      memPercent ? (point.mem ?? 0) : point.used / 2 ** 30
+    )));
+  } catch (error) {
+    // Si el JSON no está, las gráficas empiezan vacías.
+  }
+
+  const draw = () => {
+    drawSpark(cpuChart, cpuValues, 100, cssVar("--accent", "#2563eb"));
+    const max = memPercent ? 100 : Math.max(1, ...memValues) * 1.2;
+    drawSpark(memChart, memValues, max, cssVar("--lxc", "#0891b2"));
+  };
+
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      const response = await fetch(card.dataset.metricsUrl, {
+        headers: { Accept: "application/json" }, cache: "no-store",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "No se pudo leer el consumo.");
+
+      if (data.state !== "running") {
+        stopped = true;
+        if (timer) clearInterval(timer);
+        cpuValue.textContent = "—";
+        memValue.textContent = "—";
+        updated.textContent = "La máquina ya no está encendida";
+        return;
+      }
+
+      const history = data.history || [];
+      cpuValues.length = 0;
+      cpuValues.push(...history.map((point) => point.cpu));
+      memPercent = Boolean(data.mem_limit);
+      memValues.length = 0;
+      memValues.push(...history.map((point) => (
+        memPercent ? (point.mem ?? 0) : point.used / 2 ** 30
+      )));
+
+      cpuValue.textContent = `${data.cpu_pct.toFixed(1)} %`;
+      memValue.textContent = data.mem_limit
+        ? `${fmtBytes(data.mem_used)} / ${fmtBytes(data.mem_limit)}`
+        : fmtBytes(data.mem_used);
+      memNote.textContent = data.mem_limit
+        ? `${data.mem_pct.toFixed(1)} % del límite`
+        : "sin límite configurado";
+      updated.textContent = `Actualizado ${new Date().toLocaleTimeString()}`;
+      draw();
+    } catch (error) {
+      updated.textContent = error.message || "No se pudo leer el consumo";
+    }
+  };
+
+  timer = setInterval(() => {
+    if (!document.hidden) tick();
+  }, 3000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !stopped) tick();
+  });
+  window.addEventListener("resize", draw);
+  draw();
+  tick();
+}
+
+initMetrics();

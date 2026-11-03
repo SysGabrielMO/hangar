@@ -77,6 +77,42 @@
   {% endfor %}
 </div>
 
+{% elif tab == "metrics" %}
+{% if tab_error %}
+<div class="alert error">{{ tab_error }}</div>
+{% elif m.state == "running" and usage %}
+<section class="card metrics-card" data-metrics-url="/api/metrics/{{ m.kind }}/{{ m.id | urlencode }}"
+         data-mem-limit="{{ 1 if usage.mem_limit else 0 }}">
+  <div class="metrics-head">
+    <h2>Rendimiento</h2>
+    <span class="muted small" id="metrics-updated">Ahora</span>
+  </div>
+  <div class="metrics-grid">
+    <div class="metric">
+      <div class="metric-title"><span>CPU</span>
+        <strong id="metric-cpu">{{ "%.1f" | format(usage.cpu_pct) }} %</strong></div>
+      <canvas class="spark" id="metric-cpu-chart" height="90"></canvas>
+      <span class="muted small" id="metric-cpu-note">% del host</span>
+    </div>
+    <div class="metric">
+      <div class="metric-title"><span>RAM</span>
+        <strong id="metric-mem">{% if usage.mem_limit %}{{ usage.mem_used | human }} / {{ usage.mem_limit | human }}{% else %}{{ usage.mem_used | human }}{% endif %}</strong></div>
+      <canvas class="spark" id="metric-mem-chart" height="90"></canvas>
+      <span class="muted small" id="metric-mem-note">{% if usage.mem_limit %}{{ "%.1f" | format(usage.mem_pct) }} % del límite{% else %}sin límite configurado{% endif %}</span>
+    </div>
+  </div>
+  <p class="muted small">Se actualiza cada 3 s mientras esta pestaña está abierta.
+    La gráfica guarda los últimos minutos de esta sesión.</p>
+  <script type="application/json" id="metric-history">{{ usage.history | tojson }}</script>
+</section>
+{% else %}
+<section class="card">
+  <h2>Rendimiento</h2>
+  <p class="muted">La máquina está {{ "pausada" if m.state == "paused" else "apagada" }}.
+    Arranca para ver su consumo.</p>
+</section>
+{% endif %}
+
 {% elif tab == "network" %}
 {% if tab_error %}
 <div class="alert error">{{ tab_error }}</div>

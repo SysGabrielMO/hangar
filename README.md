@@ -141,7 +141,7 @@ límites configurados en las máquinas. Si entre todas superan la RAM del host,
 avisa en ámbar.
 
 Cada módulo indica lo que necesita y, si sus máquinas apagadas no caben en la
-memoria libre, «Encender todas» lo advierte antes de lanzar la tarea (se
+memoria libre, «Preparar clase» lo advierte antes de lanzar la tarea (se
 puede forzar con un segundo clic).
 
 Los botones ▶/■ de cada fila arrancan o paran esa máquina sin abrir la ficha.
@@ -178,7 +178,8 @@ hangar/
   common.py            plantillas, seguridad y utilidades compartidas
   console.py           consola web (websocket ↔ pseudo-terminal)
   networks.py          página de redes
-  modules.py           acciones por módulo y exportación
+  modules.py           preparar/recoger el laboratorio y exportación
+  metrics.py           consumo de CPU/RAM para la pestaña Rendimiento
   jobs.py              tareas en segundo plano
   db.py                módulo, descripción, notas y etiquetas (SQLite en data/)
   drivers/
@@ -211,6 +212,20 @@ redes, IPs y tus notas), útil para la memoria de una práctica.
 Preparar en orden evita arrancar nueve VMs a la vez y ahogar el host. Si una
 máquina no consigue IP en el tiempo máximo (75 s en KVM, 45 s en LXC, 15 s en
 Docker), el resto sigue y esa queda marcada como «sin IP» en el registro.
+
+## Rendimiento
+
+La pestaña **Rendimiento** de cada máquina encendida muestra su CPU (en % del
+host) y su RAM (usada y límite), con una gráfica de los últimos minutos. Se
+actualiza cada 3 s mientras la pestaña está abierta; el histórico vive en
+memoria y se pierde al reiniciar Hangar.
+
+- **KVM**: tiempo de CPU de libvirt y memoria RSS del proceso.
+- **Docker**: `container.stats()` (descontando la caché de página).
+- **LXC**: `CPU use` y `Memory use` de `lxc-info`.
+
+Si una máquina no tiene límite de memoria (por ejemplo, un contenedor Docker
+sin `--memory`), se muestra el consumo en MiB/GiB y «sin límite configurado».
 
 ## Consola
 
@@ -288,6 +303,7 @@ o lánzala desde una terminal con `./hangar-app` para ver el error.
 
 - `GET /api/machines`: todas las máquinas con sus metadatos
 - `GET /api/status`: estado, IPs y cifras del host (lo usa el refresco de la portada)
+- `GET /api/metrics/{kind}/{id}`: CPU/RAM actuales e histórico reciente
 - `GET /api/machines/{kind}/{id}`: ficha completa
 - Documentación interactiva en `/docs`
 
@@ -311,4 +327,4 @@ o lánzala desde una terminal con `./hangar-app` para ver el error.
       el nombre (KVM no borra ISOs ni discos que use otra VM)
 - [x] Snapshots: crear, listar, volver y borrar (KVM internos, con memoria si
       está encendida; LXC con `lxc-snapshot`, contenedor apagado)
-- [ ] Métricas (gráficas de CPU/RAM)
+- [x] Métricas (gráficas de CPU/RAM)

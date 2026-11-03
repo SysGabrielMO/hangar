@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import console, db, jobs, modules, networks
+from . import console, db, jobs, metrics, modules, networks
 from .common import (ACCESS_TOKEN, BASE, TOKEN_COOKIE, back, driver_or_404, host_allowed,
                      host_stats, list_all, machine_name, safe_next, same_origin, templates,
                      token_ok)
@@ -68,7 +68,7 @@ async def html_errors(request: Request, exc: StarletteHTTPException):
 POWER_MESSAGES = {"start": "Arrancando…", "stop": "Apagando…",
                   "kill": "Apagado forzado.", "restart": "Reiniciando…"}
 
-TABS = {"info": "Características", "network": "Red", "edit": "Modificar",
+TABS = {"info": "Características", "metrics": "Rendimiento", "network": "Red", "edit": "Modificar",
         "snapshots": "Snapshots", "users": "Usuarios", "notes": "Descripción y notas",
         "config": "Configuración", "delete": "Borrar"}
 
@@ -106,7 +106,7 @@ def index(request: Request, kind: str = "", state: str = "", q: str = "", module
     # Capacidad configurada: sirve para avisar antes de encender en masa.
     # El total se compara con la RAM del host y el aviso de cada módulo con la
     # memoria libre ahora mismo. Se calcula sobre todas las máquinas, no solo
-    # las visibles con el filtro, porque «Encender todas» actúa sobre el módulo
+    # las visibles con el filtro, porque «Preparar clase» actúa sobre el módulo
     # completo.
     host = host_stats()
     alloc_mem = sum(m.memory_mib for m in machines) * 2**20
@@ -204,7 +204,7 @@ def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
         raise HTTPException(404, str(e)) from e
 
     ctx = {"users": [], "fields": [], "plan": None, "snaps": [], "ifaces": [],
-           "iface_fields": [], "tab_error": None}
+           "iface_fields": [], "tab_error": None, "usage": None}
     try:
         if tab == "snapshots" and not driver.no_snapshots_reason:
             ctx["snaps"] = driver.snapshots(machine_id)
@@ -218,6 +218,8 @@ def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
         elif tab == "network":
             ctx["ifaces"] = driver.interfaces(machine_id)
             ctx["iface_fields"] = driver.interface_fields(machine_id)
+        elif tab == "metrics" and machine.state == "running":
+            ctx["usage"] = metrics.sample(kind, machine_id)
     except DriverError as e:
         ctx["tab_error"] = str(e)
 
@@ -381,6 +383,15 @@ def api_status():
         "host": host_stats(),
         "errors": errors,
     }
+
+
+@app.get("/api/metrics/{kind}/{machine_id}")
+def api_metrics(kind: str, machine_id: str):
+    driver_or_404(kind)
+    try:
+        return metrics.sample(kind, machine_id)
+    except DriverError as e:
+        raise HTTPException(404, str(e)) from e
 
 
 @app.get("/api/machines")

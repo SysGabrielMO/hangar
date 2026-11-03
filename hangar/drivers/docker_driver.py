@@ -15,7 +15,7 @@ import tarfile
 import docker
 from docker.errors import DockerException, NotFound
 
-from .base import (DeletePlan, Driver, DriverError, Field, Interface, Machine, User, check_name,
+from .base import (DeletePlan, Driver, DriverError, Field, Interface, Machine, Usage, User, check_name,
                    human_bytes, parse_ip_request, parse_number, parse_passwd)
 
 IMAGE_RE = re.compile(r"^[a-z0-9]+([._/:@-][A-Za-z0-9_.-]+)*$")
@@ -127,6 +127,26 @@ class DockerDriver(Driver):
             memory_mib=mem // 2**20, vcpus=cpus,
             ips=[n["IPAddress"] for n in nets.values() if n.get("IPAddress")],
         )
+
+    def usage(self, machine_id: str) -> Usage:
+        client = self._client()
+        try:
+            c = self._container(client, machine_id)
+            state = STATES.get(c.status, "unknown")
+            if state != "running":
+                return Usage(state=state)
+            try:
+                stats = c.stats(stream=False)
+            except DockerException as e:
+                raise DriverError(f"No se pudo leer el consumo: {e}") from e
+            cpu_ns = ((stats.get("cpu_stats") or {}).get("cpu_usage") or {}).get("total_usage", 0)
+            memory = stats.get("memory_stats") or {}
+            used = int(memory.get("usage", 0)) - int((memory.get("stats") or {}).get("cache", 0))
+            limit = int((c.attrs.get("HostConfig") or {}).get("Memory") or 0)
+            return Usage(state=state, cpu_time=int(cpu_ns) / 1e9,
+                         mem_used=max(used, 0), mem_limit=limit)
+        finally:
+            client.close()
 
     def get(self, machine_id: str) -> Machine:
         client = self._client()

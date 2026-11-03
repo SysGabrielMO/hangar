@@ -121,6 +121,10 @@ class Driver:
     def get(self, machine_id: str) -> Machine:
         raise NotImplementedError
 
+    def usage(self, machine_id: str) -> Usage:
+        """Consumo actual (CPU acumulada y memoria) para la pestaña Rendimiento."""
+        raise NotImplementedError
+
     def users(self, machine_id: str) -> list[User]:
         """Usuarios definidos dentro de la máquina (/etc/passwd)."""
         raise NotImplementedError
