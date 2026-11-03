@@ -92,7 +92,7 @@ function updateHost(host) {
   setText("host-load-text", host.load.toFixed(1));
   setBar("host-load-bar", host.load_pct);
   setText("host-disk-text", fmtBytes(host.disk_used));
-  setText("host-disk-note", `${host.disk_pct} % ocupado`);
+  setText("host-disk-note", `${host.disk_pct} % de ${host.disk_path}`);
   setBar("host-disk-bar", host.disk_pct);
 }
 

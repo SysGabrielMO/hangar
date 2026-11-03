@@ -44,7 +44,7 @@
       <span class="muted">/ {{ host.disk_total | human }}</span></span>
     <div class="meter"><span id="host-disk-bar" class="{{ 'hot' if host.disk_pct >= 90 }}"
                              style="width: {{ host.disk_pct }}%"></span></div>
-    <span class="host-note" id="host-disk-note">{{ host.disk_pct }} % ocupado</span>
+    <span class="host-note" id="host-disk-note">{{ host.disk_pct }} % de {{ host.disk_path }}</span>
   </div>
   <div class="host-item {{ 'over' if mem_over else ('warn' if alloc_pct >= 85) }}"
        title="Solo cuenta la RAM con límite configurado; los contenedores sin límite no se suman.">
@@ -114,8 +114,8 @@
 <section class="module-group">
   <header class="module-head">
     <div>
-      <h2>{{ key or "Sin módulo" }} <span class="muted">· {{ items | length }}</span></h2>
-      {% if key %}<span class="muted small">{{ modules[key] }}</span>{% endif %}
+      <h2>{{ key or "Sin módulo" }} <span class="muted">· {{ module_res[key].count }}</span></h2>
+      {% if key %}<span class="muted small">{{ modules[key] }}{% if items | length != module_res[key].count %} · {{ items | length }} {{ "visible" if items | length == 1 else "visibles" }}{% endif %}</span>{% endif %}
       <div class="module-cap muted small">
         {{ module_res[key].mem | human }} RAM · {{ "%g" | format(module_res[key].vcpus) }} vCPU
         {% if not module_res[key].fits %}

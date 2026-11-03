@@ -104,23 +104,25 @@ def index(request: Request, kind: str = "", state: str = "", q: str = "", module
     module_counts = {key: sum(meta_of(m).module == key for m in machines) for key in groups}
 
     # Capacidad configurada: sirve para avisar antes de encender en masa.
-    # Se compara con la RAM del host, no con la que queda libre, porque una VM
-    # apagada no reserva nada todavía y el aviso es orientativo.
+    # El total se compara con la RAM del host y el aviso de cada módulo con la
+    # memoria libre ahora mismo. Se calcula sobre todas las máquinas, no solo
+    # las visibles con el filtro, porque «Encender todas» actúa sobre el módulo
+    # completo.
     host = host_stats()
     alloc_mem = sum(m.memory_mib for m in machines) * 2**20
     alloc_vcpus = sum(m.vcpus for m in machines)
     alloc_pct = round(alloc_mem / host["mem_total"] * 100) if host["mem_total"] else 0
     module_res = {}
-    for key, items in groups.items():
-        if not items:
-            continue
-        need = sum(m.memory_mib for m, _ in items if m.state == "stopped") * 2**20
-        module_res[key] = {
-            "mem": sum(m.memory_mib for m, _ in items) * 2**20,
-            "vcpus": sum(m.vcpus for m, _ in items),
-            "need": need,
-            "fits": not host["mem_available"] or need <= host["mem_available"],
-        }
+    for m in machines:
+        key = meta_of(m).module
+        res = module_res.setdefault(key, {"count": 0, "mem": 0, "vcpus": 0.0, "need": 0})
+        res["count"] += 1
+        res["mem"] += m.memory_mib * 2**20
+        res["vcpus"] += m.vcpus
+        if m.state == "stopped":
+            res["need"] += m.memory_mib * 2**20
+    for res in module_res.values():
+        res["fits"] = not host["mem_available"] or res["need"] <= host["mem_available"]
 
     return templates.TemplateResponse(request, "index.html", {
         "groups": [(key, items) for key, items in groups.items() if items],

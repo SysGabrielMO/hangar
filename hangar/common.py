@@ -27,7 +27,7 @@ templates.env.globals["modules"] = db.MODULES
 templates.env.filters["human"] = human_bytes
 
 
-def host_stats() -> dict[str, float]:
+def host_stats() -> dict[str, float | int | str]:
     """Estado del host para la portada: memoria, carga y disco.
 
     Se lee de /proc para no añadir dependencias (psutil). Si algo no se puede
@@ -50,10 +50,10 @@ def host_stats() -> dict[str, float]:
         load = os.getloadavg()[0]
     except OSError:
         load = 0.0
+    # /var/lib es donde viven las imágenes de libvirt, los rootfs de LXC y
+    # Docker; si no existe, el sistema de archivos raíz.
+    disk_path = Path("/var/lib") if Path("/var/lib").exists() else Path("/")
     try:
-        # /var/lib es donde viven las imágenes de libvirt, los rootfs de LXC y
-        # Docker; si no existe, el sistema de archivos raíz.
-        disk_path = Path("/var/lib") if Path("/var/lib").exists() else Path("/")
         disk = shutil.disk_usage(disk_path)
         disk_total, disk_used = disk.total, disk.used
     except OSError:
@@ -65,6 +65,7 @@ def host_stats() -> dict[str, float]:
         "cpus": cpus, "load": load, "load_pct": min(round(load / cpus * 100), 100),
         "disk_total": disk_total, "disk_used": disk_used,
         "disk_pct": round(disk_used / disk_total * 100) if disk_total else 0,
+        "disk_path": str(disk_path),
     }
 
 
