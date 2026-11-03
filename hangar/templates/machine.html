@@ -134,6 +134,10 @@
           {% if i.defined_ip %}<span class="tag current" title="IP anotada en Hangar o reserva de la red">configurada</span>{% endif %}
           <span class="muted">· {{ i.ip_config }}</span>
         </div>
+        {% if not i.ips and not i.defined_ip and not i.dhcp %}
+        <p class="muted small">Hangar no ve una IP estática configurada dentro de la VM
+          (no hay agente, DHCP ni ARP). Anótala abajo para que salga siempre.</p>
+        {% endif %}
       </div>
       <form method="post" action="{{ base_url }}/network/{{ i.key | urlencode }}/remove"
             data-confirm="¿Quitar? Pulsa otra vez">

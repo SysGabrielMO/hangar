@@ -266,6 +266,12 @@ interfaz. Se muestra aunque la máquina esté apagada, junto a las reservas DHCP
 de libvirt y las IPs estáticas de LXC. Al cambiar una IP estática desde Hangar
 también se guarda sola.
 
+Hangar intenta descubrir la IP por el agente QEMU, las concesiones/reservas
+DHCP y la tabla ARP del host, y recuerda la última IP vista. Si una VM tiene
+una IP estática configurada **solo dentro** de ella y no tiene agente, DHCP ni
+ARP, el hipervisor no puede conocerla: anótala en Red o instala
+`qemu-guest-agent` para que aparezca sola.
+
 ## Crear máquinas
 
 Botón **+ Nueva máquina**. La creación corre en segundo plano y abre una

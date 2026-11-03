@@ -117,6 +117,20 @@ def list_all():
         results = dict(zip(DRIVERS, pool.map(safe, DRIVERS.values())))
     machines = [m for ms, _ in results.values() for m in ms]
     errors = {kind: err for kind, (_, err) in results.items() if err}
+
+    # Una IP estática dentro de una VM sin agente no la conoce el hipervisor.
+    # Mostramos la última IP vista y, si no hay, la que se haya anotado en Red.
+    last_ips = db.all_last_ips()
+    configured = db.all_iface_ips()
+    for machine in machines:
+        key = (machine.kind, machine.id)
+        if machine.ips:
+            if last_ips.get(key) != machine.ips:
+                db.save_last_ips(machine.kind, machine.id, machine.ips)
+        else:
+            remembered = configured.get(key) or last_ips.get(key)
+            if remembered:
+                machine.ips = remembered
     return machines, errors
 
 

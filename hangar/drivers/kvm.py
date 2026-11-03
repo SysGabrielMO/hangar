@@ -274,10 +274,44 @@ class KvmDriver(Driver):
     def list(self) -> list[Machine]:
         conn = self._conn()
         try:
-            return sorted((self._summary(d) for d in conn.listAllDomains()),
-                          key=lambda m: m.name)
+            reserved = self._reservation_map(conn)
+            machines = []
+            for dom in conn.listAllDomains():
+                machine = self._summary(dom)
+                if not machine.ips:
+                    machine.ips = self._reserved_ips(dom, reserved)
+                machines.append(machine)
+            return sorted(machines, key=lambda m: m.name)
         finally:
             conn.close()
+
+    @staticmethod
+    def _reservation_map(conn) -> dict[str, str]:
+        """MAC → IP de las reservas DHCP de todas las redes."""
+        reserved = {}
+        for network in conn.listAllNetworks():
+            try:
+                root = ET.fromstring(network.XMLDesc())
+            except libvirt.libvirtError:
+                continue
+            for host in root.findall("ip/dhcp/host"):
+                mac, ip = (host.get("mac") or "").lower(), host.get("ip")
+                if mac and ip:
+                    reserved[mac] = ip
+        return reserved
+
+    @staticmethod
+    def _reserved_ips(dom, reserved: dict[str, str]) -> list[str]:
+        try:
+            root = ET.fromstring(dom.XMLDesc(XML_FLAGS))
+        except libvirt.libvirtError:
+            return []
+        ips = []
+        for iface in root.findall("devices/interface"):
+            mac = iface.find("mac")
+            if mac is not None and mac.get("address", "").lower() in reserved:
+                ips.append(reserved[mac.get("address").lower()])
+        return ips
 
     def _summary(self, dom) -> Machine:
         state, max_mem_kib, _, vcpus, _ = dom.info()
@@ -292,7 +326,8 @@ class KvmDriver(Driver):
     def _ips(self, dom) -> list[str]:
         # Primero el agente (ve todas las interfaces); si no, las concesiones DHCP
         sources = [libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_AGENT,
-                   libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE]
+                   libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE,
+                   libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_ARP]
         for src in sources:
             try:
                 ifaces = dom.interfaceAddresses(src)
@@ -1015,13 +1050,15 @@ class KvmDriver(Driver):
     def _live_addresses(self, dom) -> dict[str, list[str]]:
         """MAC → IPs con prefijo, del agente o de las concesiones DHCP."""
         for src in (libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_AGENT,
-                    libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE):
+                    libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE,
+                    libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_ARP):
             try:
                 ifaces = dom.interfaceAddresses(src)
             except libvirt.libvirtError:
                 continue
             found = {(i.get("hwaddr") or "").lower(): [
-                f"{a['addr']}/{a['prefix']}" for a in (i.get("addrs") or [])
+                f"{a['addr']}/{a['prefix']}" if a.get("prefix") else a["addr"]
+                for a in (i.get("addrs") or [])
                 if a["type"] == libvirt.VIR_IP_ADDR_TYPE_IPV4]
                 for name, i in ifaces.items() if name != "lo"}
             if any(found.values()):

@@ -5,6 +5,7 @@ con cada máquina por (tipo, id).
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,6 +42,14 @@ CREATE TABLE IF NOT EXISTS iface_ip (
     ip         TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL,
     PRIMARY KEY (kind, id, iface)
+);
+
+CREATE TABLE IF NOT EXISTS last_ip (
+    kind       TEXT NOT NULL,
+    id         TEXT NOT NULL,
+    ips        TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (kind, id)
 );
 """
 # Columnas añadidas después; se crean solas en bases de datos antiguas
@@ -120,9 +129,51 @@ def save_iface_ip(kind: str, machine_id: str, iface: str, ip: str) -> None:
                          (kind, machine_id, iface))
 
 
+def all_iface_ips() -> dict[tuple[str, str], list[str]]:
+    """IPs anotadas o configuradas por máquina (para la portada y la API)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT kind, id, ip FROM iface_ip WHERE ip != '' ORDER BY updated_at DESC"
+        ).fetchall()
+    result: dict[tuple[str, str], list[str]] = {}
+    for row in rows:
+        result.setdefault((row["kind"], row["id"]), []).append(row["ip"])
+    return result
+
+
+def all_last_ips() -> dict[tuple[str, str], list[str]]:
+    """Última IP vista por Hangar para cada máquina."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT kind, id, ips FROM last_ip").fetchall()
+    result = {}
+    for row in rows:
+        try:
+            ips = json.loads(row["ips"])
+        except ValueError:
+            continue
+        if isinstance(ips, list) and ips:
+            result[(row["kind"], row["id"])] = [str(ip) for ip in ips]
+    return result
+
+
+def save_last_ips(kind: str, machine_id: str, ips: list[str]) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect() as conn:
+        if not ips:
+            conn.execute("DELETE FROM last_ip WHERE kind = ? AND id = ?", (kind, machine_id))
+            return
+        conn.execute(
+            """INSERT INTO last_ip (kind, id, ips, updated_at) VALUES (?, ?, ?, ?)
+               ON CONFLICT (kind, id) DO UPDATE SET
+                 ips = excluded.ips, updated_at = excluded.updated_at""",
+            (kind, machine_id, json.dumps(list(ips)), now),
+        )
+
+
 def delete_iface_ips(kind: str, machine_id: str) -> None:
     with _connect() as conn:
         conn.execute("DELETE FROM iface_ip WHERE kind = ? AND id = ?", (kind, machine_id))
+        conn.execute("DELETE FROM last_ip WHERE kind = ? AND id = ?", (kind, machine_id))
 
 
 def save_meta(kind: str, machine_id: str, description: str, notes: str, tags: str,
