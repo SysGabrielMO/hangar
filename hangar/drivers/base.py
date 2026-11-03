@@ -42,6 +42,7 @@ class Field:
     placeholder: str = ""
     min: float | None = None
     step: float | None = None
+    rows: int = 4           # para textarea
 
 
 @dataclass

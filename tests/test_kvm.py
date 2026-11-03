@@ -284,13 +284,15 @@ def test_create_from_qcow2_image_with_cloud_init(tmp_path, monkeypatch):
     driver = kvm_module.KvmDriver()
     monkeypatch.setattr(driver, "_conn", lambda: Conn())
     monkeypatch.setattr(kvm_module, "run_streaming", fake_run)
+    monkeypatch.setattr(driver, "_make_cloud_init",
+                        lambda pool, name, config, log: "/var/lib/libvirt/images/test-seed.iso")
 
     result = driver._create_from_image({
         "name": "cloud-test", "vcpus": 2, "memory_mib": 2048,
         "image": str(base),
         "disks": [{"size_gib": 20, "pool": "default", "format": "qcow2"}],
         "networks": [{"network": "default", "model": "virtio"}],
-        "cloud_init": "/var/lib/libvirt/images/seed.iso",
+        "cloud_init": "#cloud-config\nusers: []\n",
         "osinfo": "debian13",
     }, lambda line: None)
 
@@ -298,4 +300,4 @@ def test_create_from_qcow2_image_with_cloud_init(tmp_path, monkeypatch):
     assert "backingStore" in pool.created
     assert "--import" in captured
     assert "path=/var/lib/libvirt/images/test.qcow2,format=qcow2" in captured
-    assert "path=/var/lib/libvirt/images/seed.iso,device=cdrom" in captured
+    assert "path=/var/lib/libvirt/images/test-seed.iso,device=cdrom" in captured

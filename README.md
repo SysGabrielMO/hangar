@@ -14,7 +14,7 @@ Probado en Debian 13; en Ubuntu los paquetes se llaman igual.
 **1. Instala los paquetes del sistema.** Los imprescindibles:
 
 ```bash
-sudo apt install git python3-venv python3-libvirt libxcb-cursor0 libnotify-bin
+sudo apt install git python3-venv python3-libvirt libxcb-cursor0 libnotify-bin genisoimage
 ```
 
 Y los de lo que vayas a gestionar (si ya usas KVM, LXC o Docker, ya los tendrás):
@@ -285,8 +285,9 @@ Hangar se pierde el registro, no la máquina).
   El formulario admite **varios discos** (`20:default:qcow2`, uno por línea) y
   **varias redes** (`default:virtio`, una por línea). También puede arrancar
   una **imagen qcow2 existente** (por ejemplo, una cloud image): crea un disco
-  diferencial de ese tamaño y, si eliges una **ISO cloud-init**, la conecta
-  como CD-ROM para que la VM se configure al arrancar.
+  diferencial de ese tamaño. Si pegas un **cloud-config en YAML**, Hangar
+  genera la ISO seed (NoCloud) y la conecta como CD-ROM para que la VM se
+  configure al arrancar.
 - **LXC**: `lxc-create -t download`; la lista de imágenes se lee del servidor
   de linuxcontainers.org.
 - **Docker**: si la imagen no está, se descarga antes de crear.

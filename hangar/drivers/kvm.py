@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -786,10 +787,11 @@ class KvmDriver(Driver):
                   help="Instalar desde una ISO, arrancar una imagen qcow2 (cloud) o clonar "
                        "una VM existente (debe estar apagada). Al clonar se conservan sus "
                        "discos y redes."),
-            Field("cloud_init", "Cloud-init (ISO)", "", "select",
-                  options=[("", "— Sin cloud-init —")] + [(path, label) for path, label in isos],
-                  help="Con una imagen qcow2, se conecta como CD-ROM para que cloud-init "
-                       "configure la VM (usuario, SSH, red…)."),
+            Field("cloud_init", "Cloud-init (YAML)", "", "textarea", rows=12,
+                  placeholder="#cloud-config\nusers:\n  - name: usuario\n    ssh_authorized_keys:\n      - ssh-ed25519 AAAA...\n",
+                  help="Pega aquí el cloud-config (se le añade #cloud-config si falta). "
+                       "Hangar genera la ISO seed y la conecta como CD-ROM; solo se usa "
+                       "al crear desde una imagen qcow2."),
             Field("osinfo", "Sistema operativo (osinfo)", "", suggestions=self._osinfo_ids(),
                   placeholder="autodetectar",
                   help="Vacío = detectarlo de la ISO. Para Windows pon p. ej. win11."),
@@ -833,10 +835,7 @@ class KvmDriver(Driver):
                 spec["image"] = target
                 spec["disks"] = _parse_disks(values.get("disks", ""), pools, default_pool)
                 spec["networks"] = _parse_networks(values.get("networks", ""), networks)
-                cloud_init = values.get("cloud_init", "").strip()
-                if cloud_init and cloud_init not in isos:
-                    raise DriverError("Cloud-init: elige una ISO de la lista.")
-                spec["cloud_init"] = cloud_init
+                spec["cloud_init"] = values.get("cloud_init", "").strip()
             elif kind == "clone" and target in existing:
                 if conn.lookupByName(target).isActive():
                     raise DriverError(f"Apaga «{target}» antes de clonarla.")
@@ -850,6 +849,63 @@ class KvmDriver(Driver):
         finally:
             conn.close()
 
+    def _make_cloud_init(self, pool, name: str, config: str, log) -> str:
+        """Genera una ISO NoCloud con user-data/meta-data y la sube al pool."""
+        config = (config or "").strip()
+        if not config:
+            return ""
+        if not config.startswith(("#cloud-config", "#!")):
+            config = "#cloud-config\n" + config
+        tool = next((t for t in ("genisoimage", "mkisofs") if shutil.which(t)), None)
+        if tool is None:
+            raise DriverError("Falta genisoimage/mkisofs: sudo apt install genisoimage")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "user-data").write_text(config + "\n", encoding="utf-8")
+            (folder / "meta-data").write_text(
+                f"instance-id: hangar-{name}-{datetime.now():%Y%m%d%H%M%S}\n"
+                f"local-hostname: {name}\n", encoding="utf-8")
+            iso = folder / "seed.iso"
+            proc = subprocess.run([
+                tool, "-quiet", "-output", str(iso), "-volid", "cidata",
+                "-joliet", "-rock", "-input-charset", "utf-8",
+                str(folder / "user-data"), str(folder / "meta-data"),
+            ], capture_output=True, text=True)
+            if proc.returncode != 0 or not iso.exists():
+                raise DriverError(f"No se pudo generar la ISO cloud-init: "
+                                  f"{proc.stderr.strip() or 'error de genisoimage'}")
+
+            existing = {vol.name() for vol in pool.listAllVolumes()}
+            vol_name = f"{name}-seed.iso"
+            index = 2
+            while vol_name in existing:
+                vol_name = f"{name}-seed-{index}.iso"
+                index += 1
+            volume_xml = ET.Element("volume")
+            ET.SubElement(volume_xml, "name").text = vol_name
+            ET.SubElement(volume_xml, "capacity", unit="bytes").text = str(iso.stat().st_size)
+            ET.SubElement(volume_xml, "allocation", unit="bytes").text = str(iso.stat().st_size)
+            ET.SubElement(ET.SubElement(volume_xml, "target"), "format", type="raw")
+            volume = None
+            try:
+                volume = pool.createXML(ET.tostring(volume_xml, encoding="unicode"), 0)
+                upload = subprocess.run([
+                    "virsh", "-c", self.uri, "vol-upload", vol_name, str(iso), pool.name(),
+                ], capture_output=True, text=True)
+                if upload.returncode != 0:
+                    raise DriverError(f"No se pudo subir la ISO cloud-init al pool: "
+                                      f"{upload.stderr.strip() or 'error de virsh'}")
+                log(f"Cloud-init: ISO generada en {volume.path()}")
+                return volume.path()
+            except Exception:
+                if volume is not None:
+                    try:
+                        volume.delete(0)
+                    except libvirt.libvirtError:
+                        pass
+                raise
+
     def _create_from_image(self, spec: dict, log) -> str:
         """Crea una VM desde una imagen qcow2 (cloud) con cloud-init opcional."""
         base = Path(spec["image"])
@@ -858,6 +914,7 @@ class KvmDriver(Driver):
 
         conn = self._conn()
         target_vol = None
+        seed = ""
         try:
             try:
                 base_vol = conn.storageVolLookupByPath(str(base))
@@ -892,6 +949,8 @@ class KvmDriver(Driver):
                 target_vol.resize(size * GIB)
             target = target_vol.path()
             log(f"Disco diferencial creado en {target} sobre {base}")
+            if spec.get("cloud_init"):
+                seed = self._make_cloud_init(pool, spec["name"], spec["cloud_init"], log)
         except libvirt.libvirtError as e:
             if target_vol is not None:
                 try:
@@ -911,10 +970,8 @@ class KvmDriver(Driver):
         for disk in spec["disks"][1:]:
             command += ["--disk", f"pool={disk['pool']},size={disk['size_gib']},"
                                   f"format={disk['format']}"]
-        cloud_init = spec.get("cloud_init", "")
-        if cloud_init:
-            log(f"Cloud-init: {cloud_init}")
-            command += ["--disk", f"path={cloud_init},device=cdrom"]
+        if seed:
+            command += ["--disk", f"path={seed},device=cdrom"]
         command += ["--import", "--osinfo", osinfo]
         for network in spec["networks"]:
             command += ["--network", f"network={network['network']},model={network['model']}"]

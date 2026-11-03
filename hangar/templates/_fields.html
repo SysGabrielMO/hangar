@@ -14,7 +14,7 @@
     {% endfor %}
   </select>
   {% elif f.type == "textarea" %}
-  <textarea id="f-{{ f.key }}" name="{{ f.key }}" rows="4" placeholder="{{ f.placeholder }}">{{ f.value }}</textarea>
+  <textarea id="f-{{ f.key }}" name="{{ f.key }}" rows="{{ f.rows }}" placeholder="{{ f.placeholder }}">{{ f.value }}</textarea>
   {% else %}
   <input id="f-{{ f.key }}" name="{{ f.key }}" type="{{ f.type }}" value="{{ f.value }}"
          {% if f.placeholder %}placeholder="{{ f.placeholder }}"{% endif %}
