@@ -233,7 +233,8 @@ class KvmDriver(Driver):
         state, max_mem_kib, _, vcpus, _ = dom.info()
         m = Machine(kind=self.kind, id=dom.UUIDString(), name=dom.name(),
                     state=STATES.get(state, "unknown"),
-                    cpus=str(vcpus), memory=human_bytes(max_mem_kib * 1024))
+                    cpus=str(vcpus), memory=human_bytes(max_mem_kib * 1024),
+                    memory_mib=max_mem_kib // 1024, vcpus=float(vcpus))
         if m.state == "running":
             m.ips = self._ips(dom)
         return m

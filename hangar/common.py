@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -15,6 +16,7 @@ from markupsafe import Markup
 
 from . import db
 from .drivers import DRIVERS, Driver, DriverError
+from .drivers.base import human_bytes
 
 BASE = Path(__file__).resolve().parent
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
@@ -22,6 +24,48 @@ ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 templates = Jinja2Templates(directory=BASE / "templates")
 templates.env.globals["drivers"] = DRIVERS
 templates.env.globals["modules"] = db.MODULES
+templates.env.filters["human"] = human_bytes
+
+
+def host_stats() -> dict[str, float]:
+    """Estado del host para la portada: memoria, carga y disco.
+
+    Se lee de /proc para no añadir dependencias (psutil). Si algo no se puede
+    leer, se devuelve 0 y la portada simplemente no lo enseña.
+    """
+    mem: dict[str, int] = {}
+    try:
+        with open("/proc/meminfo", encoding="ascii") as f:
+            for line in f:
+                key, _, value = line.partition(":")
+                mem[key] = int(value.split()[0]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+
+    total = mem.get("MemTotal", 0)
+    available = mem.get("MemAvailable", mem.get("MemFree", 0))
+    used = max(total - available, 0)
+    cpus = os.cpu_count() or 1
+    try:
+        load = os.getloadavg()[0]
+    except OSError:
+        load = 0.0
+    try:
+        # /var/lib es donde viven las imágenes de libvirt, los rootfs de LXC y
+        # Docker; si no existe, el sistema de archivos raíz.
+        disk_path = Path("/var/lib") if Path("/var/lib").exists() else Path("/")
+        disk = shutil.disk_usage(disk_path)
+        disk_total, disk_used = disk.total, disk.used
+    except OSError:
+        disk_total = disk_used = 0
+
+    return {
+        "mem_total": total, "mem_available": available, "mem_used": used,
+        "mem_pct": round(used / total * 100) if total else 0,
+        "cpus": cpus, "load": load, "load_pct": min(round(load / cpus * 100), 100),
+        "disk_total": disk_total, "disk_used": disk_used,
+        "disk_pct": round(disk_used / disk_total * 100) if disk_total else 0,
+    }
 
 
 def _render_markdown(text: str) -> Markup:

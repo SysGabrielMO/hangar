@@ -72,6 +72,10 @@ class Machine:
     state: str                # "running" | "stopped" | "paused" | "unknown"
     cpus: str = "-"
     memory: str = "-"
+    # Los mismos datos que cpus/memory, pero en números, para sumar la
+    # capacidad configurada del host. 0 = sin límite o desconocido.
+    memory_mib: int = 0
+    vcpus: float = 0
     ips: list[str] = field(default_factory=list)
     # Secciones de la ficha: {"Recursos": [("vCPU", "2"), ...], ...}
     sections: dict[str, list[tuple[str, str]]] = field(default_factory=dict)

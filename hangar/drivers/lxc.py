@@ -91,8 +91,10 @@ class LxcDriver(Driver):
             return cfg.get(key, [default])[-1]
 
         state = STATES.get(info.get("State", ["?"])[0], "unknown")
+        mem_mib = _memory_mib(c("lxc.cgroup2.memory.max", ""))
         m = Machine(kind=self.kind, id=name, name=name, state=state,
                     cpus=self._cpus(cfg), memory=self._memory_label(c("lxc.cgroup2.memory.max", "")),
+                    memory_mib=mem_mib, vcpus=float(self._cpu_count(cfg)),
                     ips=info.get("IP", []), raw_config=config, raw_label="Fichero config")
 
         m.sections["General"] = [
@@ -121,15 +123,22 @@ class LxcDriver(Driver):
         return human_bytes(mib * 2**20) if mib else "sin límite"
 
     @staticmethod
-    def _cpus(cfg) -> str:
+    def _cpu_count(cfg) -> int:
         cpuset = cfg.get("lxc.cgroup2.cpuset.cpus", [None])[-1]
         if not cpuset:
-            return "sin límite"
+            return 0
         count = 0
         for part in cpuset.split(","):
             lo, _, hi = part.partition("-")
             count += int(hi) - int(lo) + 1 if hi else 1
-        return f"{count} ({cpuset})"
+        return count
+
+    @staticmethod
+    def _cpus(cfg) -> str:
+        cpuset = cfg.get("lxc.cgroup2.cpuset.cpus", [None])[-1]
+        if not cpuset:
+            return "sin límite"
+        return f"{LxcDriver._cpu_count(cfg)} ({cpuset})"
 
     @staticmethod
     def _networks(cfg) -> list[tuple[str, str]]:

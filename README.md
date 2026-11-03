@@ -133,6 +133,23 @@ Al modificar un contenedor, el ayudante guarda antes una copia del config en
 | LXC | en caliente si está encendido (cgroups) | — |
 | Docker | en caliente | — |
 
+## Panel de capacidad
+
+La portada muestra, encima de la lista, la RAM y la carga del host, el disco
+de `/var/lib` (imágenes de VM, LXC y Docker) y la RAM/vCPU que suman los
+límites configurados en las máquinas. Si entre todas superan la RAM del host,
+avisa en ámbar.
+
+Cada módulo indica lo que necesita y, si sus máquinas apagadas no caben en la
+memoria libre, «Encender todas» lo advierte antes de lanzar la tarea (se
+puede forzar con un segundo clic).
+
+Los botones ▶/■ de cada fila arrancan o paran esa máquina sin abrir la ficha.
+El estado, las IPs y las cifras del host se refrescan solos cada 6 segundos.
+
+Solo se suma la RAM con límite configurado: un contenedor Docker o LXC sin
+límite no reserva una cantidad concreta y no entra en la cuenta.
+
 ## Seguridad
 
 Hangar controla el host con permisos equivalentes a root (grupos `libvirt`
@@ -265,6 +282,7 @@ o lánzala desde una terminal con `./hangar-app` para ver el error.
 ## API
 
 - `GET /api/machines`: todas las máquinas con sus metadatos
+- `GET /api/status`: estado, IPs y cifras del host (lo usa el refresco de la portada)
 - `GET /api/machines/{kind}/{id}`: ficha completa
 - Documentación interactiva en `/docs`
 
@@ -281,6 +299,8 @@ o lánzala desde una terminal con `./hangar-app` para ver el error.
 - [x] Módulos del grado, con acciones por módulo y exportación a Markdown
 - [x] Consola web (terminal) y pantalla con virt-viewer
 - [x] Añadir/quitar interfaces y cambiar IPs; página de redes
+- [x] Panel de capacidad del host, aviso antes de encender un módulo que no
+      cabe y acciones de arranque/parada por fila
 - [ ] Añadir/quitar discos
 - [x] Borrar, con plan de lo que se borra/conserva y confirmación escribiendo
       el nombre (KVM no borra ISOs ni discos que use otra VM)

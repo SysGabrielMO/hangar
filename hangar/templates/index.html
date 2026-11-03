@@ -2,15 +2,68 @@
 {% macro url(kind=kind, state=state, q=q, module=module) -%}
 /?kind={{ kind | urlencode }}&state={{ state | urlencode }}&module={{ module | urlencode }}&q={{ q | urlencode }}
 {%- endmacro %}
+{% macro power_button(m) -%}
+{% set running = m.state == "running" %}
+<button class="btn small power" data-power="{{ 'stop' if running else 'start' }}"
+        data-kind="{{ m.kind }}" data-id="{{ m.id }}" data-name="{{ m.name }}"
+        title="{{ 'Parar' if running else ('Reanudar' if m.state == 'paused' else 'Arrancar') }}"
+        aria-label="{{ 'Parar' if running else ('Reanudar' if m.state == 'paused' else 'Arrancar') }} {{ m.name }}">
+  {{- "■" if running else "▶" -}}
+</button>
+{%- endmacro %}
 {% block content %}
 
 <section class="stats">
-  <div class="stat"><span class="stat-n">{{ total }}</span><span class="muted">máquinas</span></div>
-  <div class="stat"><span class="stat-n running-n">{{ running }}</span><span class="muted">encendidas</span></div>
+  <div class="stat"><span class="stat-n" data-stat="total">{{ total }}</span><span class="muted">máquinas</span></div>
+  <div class="stat"><span class="stat-n running-n" data-stat="running">{{ running }}</span><span class="muted">encendidas</span></div>
   {% for k, d in drivers.items() %}
-  <div class="stat"><span class="stat-n">{{ counts[k] }}</span><span class="badge {{ k }}">{{ d.label }}</span></div>
+  <div class="stat"><span class="stat-n" data-stat="kind-{{ k }}">{{ counts[k] }}</span><span class="badge {{ k }}">{{ d.label }}</span></div>
   {% endfor %}
 </section>
+
+<section class="host-strip" aria-label="Estado del host">
+  <div class="host-item">
+    <span class="host-label">RAM del host</span>
+    <span class="host-value"><strong id="host-ram-text">{{ host.mem_used | human }}</strong>
+      <span class="muted">/ {{ host.mem_total | human }}</span></span>
+    <div class="meter"><span id="host-ram-bar" class="{{ 'hot' if host.mem_pct >= 90 }}"
+                             style="width: {{ host.mem_pct }}%"></span></div>
+    <span class="host-note" id="host-ram-note">{{ host.mem_pct }} % en uso · {{ host.mem_available | human }} disponible</span>
+  </div>
+  <div class="host-item">
+    <span class="host-label">Carga de CPU</span>
+    <span class="host-value"><strong id="host-load-text">{{ "%.1f" | format(host.load) }}</strong>
+      <span class="muted">/ {{ host.cpus }} CPU</span></span>
+    <div class="meter"><span id="host-load-bar" class="{{ 'hot' if host.load_pct >= 90 }}"
+                             style="width: {{ host.load_pct }}%"></span></div>
+    <span class="host-note">media del último minuto</span>
+  </div>
+  <div class="host-item" title="Sistema de archivos de /var/lib (imágenes de VM, LXC y Docker)">
+    <span class="host-label">Disco</span>
+    <span class="host-value"><strong id="host-disk-text">{{ host.disk_used | human }}</strong>
+      <span class="muted">/ {{ host.disk_total | human }}</span></span>
+    <div class="meter"><span id="host-disk-bar" class="{{ 'hot' if host.disk_pct >= 90 }}"
+                             style="width: {{ host.disk_pct }}%"></span></div>
+    <span class="host-note" id="host-disk-note">{{ host.disk_pct }} % ocupado</span>
+  </div>
+  <div class="host-item {{ 'over' if mem_over else ('warn' if alloc_pct >= 85) }}"
+       title="Solo cuenta la RAM con límite configurado; los contenedores sin límite no se suman.">
+    <span class="host-label">RAM configurada</span>
+    <span class="host-value"><strong>{{ alloc_mem | human }}</strong>
+      <span class="muted">/ {{ host.mem_total | human }}</span></span>
+    <div class="meter"><span class="{{ 'over' if mem_over else ('hot' if alloc_pct >= 85) }}"
+                             style="width: {{ [alloc_pct, 100] | min }}%"></span></div>
+    <span class="host-note">{{ alloc_pct }} % · {{ "%g" | format(alloc_vcpus) }} vCPU configuradas</span>
+  </div>
+</section>
+
+{% if mem_over %}
+<div class="alert warn">
+  <strong>Ojo con la memoria:</strong> entre todas las máquinas configuran {{ alloc_mem | human }} de RAM
+  ({{ alloc_pct }} % del host) y {{ "%g" | format(alloc_vcpus) }} vCPU. Puedes encenderlas por módulos, pero
+  «Encender todas» en uno grande puede ahogar el equipo. Hangar te avisa antes de lanzarlo.
+</div>
+{% endif %}
 
 {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
@@ -63,11 +116,18 @@
     <div>
       <h2>{{ key or "Sin módulo" }} <span class="muted">· {{ items | length }}</span></h2>
       {% if key %}<span class="muted small">{{ modules[key] }}</span>{% endif %}
+      <div class="module-cap muted small">
+        {{ module_res[key].mem | human }} RAM · {{ "%g" | format(module_res[key].vcpus) }} vCPU
+        {% if not module_res[key].fits %}
+        <span class="cap-warn" title="La RAM de las máquinas apagadas no cabe en la que queda libre">⚠ no cabe ahora</span>
+        {% endif %}
+      </div>
     </div>
     {% if key %}
     <div class="actions">
-      <form method="post" action="/modules/{{ key | urlencode }}/start" data-confirm="¿Encender todas? Pulsa otra vez">
-        <button class="btn small">Encender todas</button>
+      <form method="post" action="/modules/{{ key | urlencode }}/start"
+            data-confirm="{% if not module_res[key].fits %}No cabe: necesita {{ module_res[key].need | human }} y quedan {{ host.mem_available | human }} libres. Pulsa otra vez para forzar{% else %}¿Encender todas? Pulsa otra vez{% endif %}">
+        <button class="btn small {{ 'caution' if not module_res[key].fits }}">Encender todas</button>
       </form>
       <form method="post" action="/modules/{{ key | urlencode }}/stop" data-confirm="¿Apagar todas? Pulsa otra vez">
         <button class="btn small">Apagar todas</button>
@@ -79,19 +139,19 @@
   <div class="table-wrap">
   <table class="machines">
     <thead>
-      <tr><th>Nombre</th><th>Tipo</th><th>CPU</th><th>Memoria</th><th>IP</th><th>Descripción</th><th>Módulo</th></tr>
+      <tr><th>Nombre</th><th>Tipo</th><th>CPU</th><th>Memoria</th><th>IP</th><th>Descripción</th><th>Módulo</th><th></th></tr>
     </thead>
     <tbody>
     {% for m, meta in items %}
-      <tr data-href="/m/{{ m.kind }}/{{ m.id | urlencode }}">
+      <tr data-href="/m/{{ m.kind }}/{{ m.id | urlencode }}" data-key="{{ m.kind }}/{{ m.id }}">
         <td class="name">
-          <span class="dot {{ m.state }}" title="{{ m.state }}"></span>
+          <span class="dot {{ m.state }} js-dot" title="{{ m.state }}"></span>
           <a href="/m/{{ m.kind }}/{{ m.id | urlencode }}">{{ m.name }}</a>
         </td>
         <td><span class="badge {{ m.kind }}">{{ drivers[m.kind].label }}</span></td>
         <td>{{ m.cpus }}</td>
         <td class="nowrap">{{ m.memory }}</td>
-        <td class="mono">{{ m.ips | join(", ") or "—" }}</td>
+        <td class="mono js-ips">{{ m.ips | join(", ") or "—" }}</td>
         <td class="desc">
           {{ meta.description or "" }}
           {% for t in meta.tag_list %}<span class="tag">{{ t }}</span>{% endfor %}
@@ -105,6 +165,7 @@
             </select>
           </form>
         </td>
+        <td class="js-power" data-state="{{ m.state }}">{{ power_button(m) }}</td>
       </tr>
     {% endfor %}
     </tbody>

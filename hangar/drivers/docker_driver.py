@@ -124,6 +124,7 @@ class DockerDriver(Driver):
             state=STATES.get(c.status, "unknown"),
             cpus=f"{cpus:g}" if cpus else "sin límite",
             memory=human_bytes(mem) if mem else "sin límite",
+            memory_mib=mem // 2**20, vcpus=cpus,
             ips=[n["IPAddress"] for n in nets.values() if n.get("IPAddress")],
         )
 

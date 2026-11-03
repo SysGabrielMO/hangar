@@ -12,7 +12,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import console, db, jobs, modules, networks
 from .common import (ACCESS_TOKEN, BASE, TOKEN_COOKIE, back, driver_or_404, host_allowed,
-                     list_all, machine_name, safe_next, same_origin, templates, token_ok)
+                     host_stats, list_all, machine_name, safe_next, same_origin, templates,
+                     token_ok)
 from .drivers import DRIVERS, DriverError
 from .drivers.base import SNAPSHOT_NAME_RE
 
@@ -102,12 +103,34 @@ def index(request: Request, kind: str = "", state: str = "", q: str = "", module
         groups[row[1].module].append(row)
     module_counts = {key: sum(meta_of(m).module == key for m in machines) for key in groups}
 
+    # Capacidad configurada: sirve para avisar antes de encender en masa.
+    # Se compara con la RAM del host, no con la que queda libre, porque una VM
+    # apagada no reserva nada todavía y el aviso es orientativo.
+    host = host_stats()
+    alloc_mem = sum(m.memory_mib for m in machines) * 2**20
+    alloc_vcpus = sum(m.vcpus for m in machines)
+    alloc_pct = round(alloc_mem / host["mem_total"] * 100) if host["mem_total"] else 0
+    module_res = {}
+    for key, items in groups.items():
+        if not items:
+            continue
+        need = sum(m.memory_mib for m, _ in items if m.state == "stopped") * 2**20
+        module_res[key] = {
+            "mem": sum(m.memory_mib for m, _ in items) * 2**20,
+            "vcpus": sum(m.vcpus for m, _ in items),
+            "need": need,
+            "fits": not host["mem_available"] or need <= host["mem_available"],
+        }
+
     return templates.TemplateResponse(request, "index.html", {
         "groups": [(key, items) for key, items in groups.items() if items],
         "total_rows": len(rows), "errors": errors, "counts": counts, "total": len(machines),
         "running": running, "kind": kind, "state": state, "q": q, "module": module,
         "module_counts": module_counts, "no_module": NO_MODULE,
         "jobs": list(jobs.JOBS.values())[-5:][::-1], "msg": msg, "error": error,
+        "host": host, "alloc_mem": alloc_mem, "alloc_vcpus": alloc_vcpus,
+        "alloc_pct": alloc_pct, "mem_over": bool(host["mem_total"] and alloc_mem > host["mem_total"]),
+        "module_res": module_res,
         "here": str(request.url.path) + (f"?{request.url.query}" if request.url.query else ""),
     })
 
@@ -324,18 +347,39 @@ async def delete(request: Request, kind: str, machine_id: str):
 
 
 @app.post("/m/{kind}/{machine_id}/{action}")
-def power(kind: str, machine_id: str, action: str):
+def power(request: Request, kind: str, machine_id: str, action: str):
     driver = driver_or_404(kind)
     if action not in POWER_MESSAGES:
         raise HTTPException(404)
+    # La portada usa fetch() y espera JSON; la ficha sigue con el redirect de siempre.
+    wants_json = "application/json" in request.headers.get("accept", "")
     try:
         getattr(driver, action)(machine_id)
     except DriverError as e:
+        if wants_json:
+            return JSONResponse({"detail": str(e)}, status_code=400)
         return back(kind, machine_id, error=str(e))
+    if wants_json:
+        return JSONResponse({"ok": True, "msg": POWER_MESSAGES[action]})
     return back(kind, machine_id, msg=POWER_MESSAGES[action])
 
 
 # --- API JSON (para scripts o un futuro frontend) -------------------------
+
+@app.get("/api/status")
+def api_status():
+    """Versión ligera de /api/machines para el refresco automático de la portada."""
+    machines, errors = list_all()
+    return {
+        "machines": [{"kind": m.kind, "id": m.id, "name": m.name, "state": m.state,
+                      "ips": m.ips} for m in machines],
+        "total": len(machines),
+        "running": sum(m.state == "running" for m in machines),
+        "counts": {k: sum(m.kind == k for m in machines) for k in DRIVERS},
+        "host": host_stats(),
+        "errors": errors,
+    }
+
 
 @app.get("/api/machines")
 def api_machines():
