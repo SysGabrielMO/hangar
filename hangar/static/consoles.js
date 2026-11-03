@@ -9,8 +9,35 @@
   const add = document.getElementById("console-add");
   const detail = document.getElementById("active-detail");
   let activeKey = null;
+  const STORAGE_KEY = "hangar.consoles.v1";
 
   const keyOf = (m) => `${m.kind}/${m.id}`;
+
+  function loadState() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+      if (saved && Array.isArray(saved.tabs)) {
+        return {
+          tabs: saved.tabs.filter((key) => typeof key === "string"),
+          active: typeof saved.active === "string" ? saved.active : null,
+        };
+      }
+    } catch (error) {
+      // localStorage puede estar deshabilitado; se sigue usando la URL.
+    }
+    return { tabs: [], active: null };
+  }
+
+  function saveState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        tabs: [...tabs.keys()],
+        active: activeKey,
+      }));
+    } catch (error) {
+      // Sin persistencia local: la URL de la página sigue sirviendo.
+    }
+  }
 
   const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -187,6 +214,7 @@
     tabs.forEach((state) => params.append("m", keyOf(state.m)));
     const query = params.toString();
     history.replaceState(null, "", `/consoles${query ? `?${query}` : ""}`);
+    saveState();
   }
 
   add.addEventListener("change", () => {
@@ -204,13 +232,29 @@
     }
   });
 
-  // Pestañas iniciales: /consoles?m=kvm/uuid&m=docker/name
-  new URLSearchParams(location.search).getAll("m").forEach((key) => {
-    const machine = byKey.get(key);
-    if (machine) makeTab(machine);
+  // Primero las pestañas guardadas y luego las que pida la URL. Así, al volver
+  // desde «Máquinas» o «Ficha», se recuperan las consolas que estaban abiertas.
+  const requested = new URLSearchParams(location.search).getAll("m");
+  const saved = loadState();
+  const keys = [];
+  saved.tabs.forEach((key) => {
+    if (byKey.has(key) && !keys.includes(key)) keys.push(key);
   });
+  requested.forEach((key) => {
+    if (byKey.has(key) && !keys.includes(key)) keys.push(key);
+  });
+  keys.forEach((key) => makeTab(byKey.get(key)));
+
+  let target = null;
+  if (requested.length) {
+    target = [...requested].reverse().find((key) => tabs.has(key)) || null;
+  } else if (saved.active && tabs.has(saved.active)) {
+    target = saved.active;
+  }
+  if (target) activate(target);
 
   updateAdd();
   empty.hidden = tabs.size > 0;
   if (!tabs.size) detail.hidden = true;
+  if (tabs.size) saveState();
 })();

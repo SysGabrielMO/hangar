@@ -236,7 +236,8 @@ sin `--memory`), se muestra el consumo en MiB/GiB y «sin límite configurado».
   de trabajo con [xterm.js](https://xtermjs.org/) (incluido en
   `hangar/static/vendor`, funciona sin Internet) y **pestañas**. Puedes añadir
   varias máquinas con el desplegable «Añadir consola»; la URL guarda las
-  abiertas (`/consoles?m=...`), así que al recargar siguen ahí.
+  abiertas (`/consoles?m=...`) y el navegador las recuerda al volver desde
+  otra página, así que no se pierden al ir a mirar el estado de otra máquina.
   KVM usa la consola serie (`virsh console`), LXC `lxc-attach` y Docker
   `docker exec -it`.
 - **Consola serie** (KVM): enlace en la ficha para abrir la consola individual
