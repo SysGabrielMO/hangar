@@ -126,11 +126,12 @@
     {% if key %}
     <div class="actions">
       <form method="post" action="/modules/{{ key | urlencode }}/start"
-            data-confirm="{% if not module_res[key].fits %}No cabe: necesita {{ module_res[key].need | human }} y quedan {{ host.mem_available | human }} libres. Pulsa otra vez para forzar{% else %}¿Encender todas? Pulsa otra vez{% endif %}">
-        <button class="btn small {{ 'caution' if not module_res[key].fits }}">Encender todas</button>
+            data-confirm="{% if not module_res[key].fits %}No cabe: necesita {{ module_res[key].need | human }} y quedan {{ host.mem_available | human }} libres. Pulsa otra vez para forzar{% else %}¿Preparar la clase? Arranca en orden y espera IP. Pulsa otra vez{% endif %}">
+        <button class="btn small {{ 'caution' if not module_res[key].fits }}"
+                title="Arranca las máquinas en orden y espera a que tengan IP">Preparar clase</button>
       </form>
-      <form method="post" action="/modules/{{ key | urlencode }}/stop" data-confirm="¿Apagar todas? Pulsa otra vez">
-        <button class="btn small">Apagar todas</button>
+      <form method="post" action="/modules/{{ key | urlencode }}/stop" data-confirm="¿Recoger? Apaga todas. Pulsa otra vez">
+        <button class="btn small" title="Apaga todas las máquinas del módulo">Recoger</button>
       </form>
       <a class="btn small" href="/modules/{{ key | urlencode }}/export.md" title="Documentación del laboratorio en Markdown">Exportar</a>
     </div>

@@ -203,9 +203,14 @@ SERVICIOS, INFRAESTRUCTURA, PROYECTO INTEGRADO, SEGURIDAD). Se asigna desde el
 desplegable de la portada, en «Descripción y notas» o al crearla. La lista
 está en `MODULES` de `hangar/db.py`.
 
-Por módulo puedes **encender o apagar todas** sus máquinas y **exportar** su
-documentación en Markdown (máquinas, recursos, redes, IPs y tus notas), útil
-para la memoria de una práctica.
+Por módulo puedes **preparar la clase** (arranca las máquinas en orden, espera
+a que tengan IP y resume cómo ha ido), **recoger** (las apaga y espera a que
+terminen) y **exportar** su documentación en Markdown (máquinas, recursos,
+redes, IPs y tus notas), útil para la memoria de una práctica.
+
+Preparar en orden evita arrancar nueve VMs a la vez y ahogar el host. Si una
+máquina no consigue IP en el tiempo máximo (75 s en KVM, 45 s en LXC, 15 s en
+Docker), el resto sigue y esa queda marcada como «sin IP» en el registro.
 
 ## Consola
 

@@ -1,7 +1,8 @@
-"""Acciones sobre un módulo entero: encender/apagar todo y exportar su
-documentación en Markdown (para la memoria de la práctica)."""
+"""Acciones sobre un módulo entero: preparar/recoger el laboratorio y exportar
+su documentación en Markdown (para la memoria de la práctica)."""
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from urllib.parse import quote
 
@@ -9,10 +10,17 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from . import db, jobs
-from .common import list_all
+from .common import host_stats, list_all
 from .drivers import DRIVERS, DriverError
+from .drivers.base import human_bytes
 
 router = APIRouter()
+
+# Cuánto se espera a que una máquina arrancada tenga IP. Docker la tiene casi
+# al instante; una VM con DHCP puede tardar bastante más.
+READY_TIMEOUT = {"kvm": 75, "lxc": 45, "docker": 15}
+STOP_TIMEOUT = 45
+POLL = 2
 
 
 def _machines_of(module: str):
@@ -24,33 +32,123 @@ def _machines_of(module: str):
             if (m.kind, m.id) in meta and meta[(m.kind, m.id)].module == module]
 
 
+def _wait_ready(driver, machine, log) -> bool:
+    """Espera a que la máquina esté encendida y, si es posible, con IP."""
+    timeout = READY_TIMEOUT.get(driver.kind, 30)
+    deadline = time.monotonic() + timeout
+    last_state = ""
+    while time.monotonic() < deadline:
+        try:
+            current = driver.get(machine.id)
+        except DriverError as e:
+            log(f"  {machine.name}: {e}")
+            time.sleep(POLL)
+            continue
+        if current.state == "running" and current.ips:
+            log(f"  ✓ {machine.name} lista · {', '.join(current.ips)}")
+            return True
+        if current.state == "running" and driver.kind == "docker":
+            # Un contenedor con --network none no tendrá IP nunca.
+            log(f"  ✓ {machine.name} arrancado (sin IP de red)")
+            return True
+        if current.state != last_state:
+            log(f"  {machine.name}: {'arrancando' if current.state == 'running' else current.state}…")
+            last_state = current.state
+        time.sleep(POLL)
+    log(f"  ⚠ {machine.name} sigue sin IP tras {timeout} s (¿no tiene DHCP?)")
+    return False
+
+
+def _wait_stopped(driver, machine, log) -> bool:
+    deadline = time.monotonic() + STOP_TIMEOUT
+    while time.monotonic() < deadline:
+        try:
+            if driver.get(machine.id).state == "stopped":
+                return True
+        except DriverError:
+            pass
+        time.sleep(POLL)
+    log(f"  ⚠ {machine.name} sigue apagándose tras {STOP_TIMEOUT} s")
+    return False
+
+
+def _prepare(module: str, targets, log) -> str:
+    todo = [m for m, _ in targets if m.state in ("stopped", "paused")]
+    if not todo:
+        log("Ya estaba todo encendido: no hay nada que preparar.")
+        return ""
+
+    need = sum(m.memory_mib for m in todo if m.state == "stopped") * 2**20
+    host = host_stats()
+    if need and host["mem_available"] and need > host["mem_available"]:
+        log(f"⚠ Las máquinas apagadas piden {human_bytes(need)} y solo hay "
+            f"{human_bytes(host['mem_available'])} libres. Se arrancan de una en una.")
+
+    log(f"Preparando {len(todo)} máquina(s) de {module}…")
+    ready = failed = 0
+    for index, machine in enumerate(todo, 1):
+        driver = DRIVERS[machine.kind]
+        log(f"[{index}/{len(todo)}] {machine.name} ({driver.label})")
+        try:
+            driver.start(machine.id)
+        except DriverError as e:
+            failed += 1
+            log(f"  ✗ {e}")
+            continue
+        if _wait_ready(driver, machine, log):
+            ready += 1
+
+    missing = len(todo) - ready - failed
+    log(f"Resumen: {ready} lista(s), {missing} sin IP, {failed} con error.")
+    if failed:
+        raise DriverError(f"{failed} de {len(todo)} máquinas no arrancaron; mira el registro.")
+    return ""
+
+
+def _collect(module: str, targets, log) -> str:
+    todo = [m for m, _ in targets if m.state in ("running", "paused")]
+    if not todo:
+        log("No había nada encendido: el laboratorio ya estaba recogido.")
+        return ""
+
+    log(f"Recogiendo {len(todo)} máquina(s) de {module}…")
+    failed = stopped = 0
+    for index, machine in enumerate(todo, 1):
+        driver = DRIVERS[machine.kind]
+        log(f"[{index}/{len(todo)}] {machine.name} ({driver.label})")
+        try:
+            driver.stop(machine.id)
+        except DriverError as e:
+            failed += 1
+            log(f"  ✗ {e}")
+            continue
+        if _wait_stopped(driver, machine, log):
+            stopped += 1
+            log(f"  ✓ {machine.name} apagada")
+
+    log(f"Resumen: {stopped} apagada(s), {failed} con error.")
+    if failed:
+        raise DriverError(f"{failed} de {len(todo)} máquinas no se apagaron; mira el registro.")
+    return ""
+
+
 @router.post("/modules/{module}/{action}")
 def power_module(module: str, action: str):
     if action not in ("start", "stop"):
         raise HTTPException(404)
     targets = _machines_of(module)
-    wanted = "stopped" if action == "start" else "running"
+
+    if action == "start":
+        title = f"Preparar clase · {module}"
+    else:
+        title = f"Recoger · {module}"
 
     def work(log):
-        todo = [m for m, _ in targets if m.state == wanted or
-                (action == "start" and m.state == "paused")]
-        if not todo:
-            log("No había nada que " + ("encender." if action == "start" else "apagar."))
-        failed = 0
-        for m in todo:
-            try:
-                getattr(DRIVERS[m.kind], action)(m.id)
-                log(f"✓ {m.name} ({DRIVERS[m.kind].label})")
-            except DriverError as e:
-                failed += 1
-                log(f"✗ {m.name}: {e}")
-        if failed:
-            raise DriverError(f"{failed} de {len(todo)} máquinas fallaron; mira el registro.")
-        return ""
+        if action == "start":
+            return _prepare(module, targets, log)
+        return _collect(module, targets, log)
 
-    verb = "Encender" if action == "start" else "Apagar"
-    job = jobs.submit("", f"{verb} todas las máquinas de {module}", work,
-                      link=f"/?module={quote(module)}")
+    job = jobs.submit("", title, work, link=f"/?module={quote(module)}")
     return RedirectResponse(f"/jobs/{job.id}", status_code=303)
 
 
