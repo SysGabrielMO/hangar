@@ -80,12 +80,26 @@ def test_parse_disks_errors():
 def test_parse_networks():
     from hangar.drivers.kvm import _parse_networks
 
-    nets = _parse_networks("default:virtio\nred-privada:e1000e", {"default", "red-privada"})
+    nets = _parse_networks("default:virtio\nred-privada:e1000e",
+                           {"default", "red-privada"}, set())
     assert nets == [
-        {"network": "default", "model": "virtio"},
-        {"network": "red-privada", "model": "e1000e"},
+        {"type": "network", "name": "default", "model": "virtio"},
+        {"type": "network", "name": "red-privada", "model": "e1000e"},
     ]
-    assert _parse_networks("", {"default"}) == []
+    assert _parse_networks("", {"default"}, set()) == []
+
+
+def test_parse_networks_json():
+    from hangar.drivers.kvm import _parse_networks
+
+    nets = _parse_networks(
+        '[{"source": "network:default", "model": "virtio"}, '
+        '{"source": "bridge:br0", "model": "e1000e"}]',
+        {"default"}, {"br0"})
+    assert nets == [
+        {"type": "network", "name": "default", "model": "virtio"},
+        {"type": "bridge", "name": "br0", "model": "e1000e"},
+    ]
 
 
 def test_parse_networks_errors():
@@ -95,9 +109,9 @@ def test_parse_networks_errors():
     from hangar.drivers.kvm import _parse_networks
 
     with pytest.raises(DriverError, match="no existe"):
-        _parse_networks("otra:virtio", {"default"})
+        _parse_networks("otra:virtio", {"default"}, set())
     with pytest.raises(DriverError, match="modelo"):
-        _parse_networks("default:pcnet", {"default"})
+        _parse_networks("default:pcnet", {"default"}, set())
 
 
 def test_next_disk_target():
@@ -213,8 +227,8 @@ def test_create_uses_all_disks_and_networks(monkeypatch):
             {"size_gib": 50, "pool": "default", "format": "raw"},
         ],
         "networks": [
-            {"network": "default", "model": "virtio"},
-            {"network": "red-privada", "model": "e1000e"},
+            {"type": "network", "name": "default", "model": "virtio"},
+            {"type": "network", "name": "red-privada", "model": "e1000e"},
         ],
         "iso": "/tmp/debian.iso", "osinfo": "",
     }, lambda line: None)
@@ -291,7 +305,7 @@ def test_create_from_qcow2_image_with_cloud_init(tmp_path, monkeypatch):
         "name": "cloud-test", "vcpus": 2, "memory_mib": 2048,
         "image": str(base),
         "disks": [{"size_gib": 20, "pool": "default", "format": "qcow2"}],
-        "networks": [{"network": "default", "model": "virtio"}],
+        "networks": [{"type": "network", "name": "default", "model": "virtio"}],
         "cloud_init": "#cloud-config\nusers: []\n",
         "osinfo": "debian13",
     }, lambda line: None)

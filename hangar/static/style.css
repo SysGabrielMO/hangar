@@ -263,6 +263,21 @@ pre.raw { margin: 0; padding: 14px; background: var(--code-bg); border-radius: 8
 }
 .toast.error { border-left-color: var(--danger); }
 
+/* Editor de redes del alta de KVM */
+.network-editor > label { font-weight: 600; font-size: 14px; }
+.network-rows { display: flex; flex-direction: column; gap: 8px; }
+.network-row { display: flex; gap: 8px; align-items: center; }
+.network-row .network-source { flex: 1; min-width: 0; }
+.network-row .network-model { flex: 0 1 210px; }
+.network-remove { flex: none; padding: 4px 9px; color: var(--danger); border-color: transparent; }
+.network-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.network-create { max-width: 620px; }
+.network-create[hidden] { display: none; }
+.network-create .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.network-create .checkbox { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.network-create .checkbox input { width: 16px; height: 16px; accent-color: var(--accent); }
+.alert[hidden] { display: none; }
+
 /* Cajón de consola de la ficha */
 body.console-open { padding-bottom: min(48vh, 520px); }
 .console-drawer {
@@ -309,4 +324,7 @@ body.console-open { padding-bottom: min(48vh, 520px); }
   body.console-open { padding-bottom: 58vh; }
   .console-drawer-bar { gap: 6px; padding: 6px 8px; }
   .console-drawer-bar a { margin-left: 0; }
+  .network-row { flex-wrap: wrap; }
+  .network-row .network-model { flex: 1 1 140px; }
+  .network-create .field-row { grid-template-columns: 1fr; }
 }

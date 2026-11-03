@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 from dataclasses import asdict
 from datetime import datetime
 from urllib.parse import quote
@@ -143,8 +144,9 @@ def index(request: Request, kind: str = "", state: str = "", q: str = "", module
 def _render_new(request: Request, kind: str, values: dict[str, str] | None = None,
                 error: str = "", status_code: int = 200):
     fields = []
+    driver = driver_or_404(kind)
     try:
-        fields = driver_or_404(kind).create_fields()
+        fields = driver.create_fields()
     except DriverError as e:
         error = error or str(e)
     if values is not None:  # volver a mostrar lo que escribió el usuario
@@ -152,10 +154,28 @@ def _render_new(request: Request, kind: str, values: dict[str, str] | None = Non
             f.value = values.get(f.key, "") if f.type != "checkbox" else \
                 ("1" if f.key in values else "")
     values = values or {}
+
+    network_options, default_network, initial_networks = [], "", []
+    if kind == "kvm":
+        try:
+            network_options, default_network = driver.network_choices()
+        except DriverError as e:
+            error = error or str(e)
+        raw_networks = values.get("networks", "")
+        if raw_networks:
+            try:
+                initial_networks = json.loads(raw_networks)
+            except ValueError:
+                initial_networks = []
+        elif default_network:
+            initial_networks = [{"source": default_network, "model": "virtio"}]
+
     return templates.TemplateResponse(request, "new.html", {
         "kind": kind, "fields": fields, "error": error,
         "description": values.get("description", ""),
         "module": values.get("module", request.query_params.get("module", "")),
+        "network_options": network_options, "default_network": default_network,
+        "initial_networks": initial_networks,
     }, status_code=status_code)
 
 

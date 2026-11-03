@@ -15,8 +15,20 @@
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
 {% if fields %}
-<form class="card edit-form" method="post" action="/new/{{ kind }}">
+<form class="card edit-form" method="post" action="/new/{{ kind }}" id="new-machine-form">
   {{ render_fields(fields) }}
+  {% if kind == "kvm" %}
+  <div class="field network-editor">
+    <label>Redes</label>
+    <div id="network-rows" class="network-rows"></div>
+    <div class="network-actions">
+      <button class="btn small" type="button" id="add-network">+ Añadir red</button>
+      <button class="btn small" type="button" id="new-network">+ Crear red nueva</button>
+    </div>
+    <small class="muted">La primera red es la principal. Puedes dejar la lista vacía.</small>
+    <input type="hidden" name="networks" id="networks-json">
+  </div>
+  {% endif %}
   <div class="field">
     <label for="f-module">Módulo</label>
     <select id="f-module" name="module">
@@ -32,5 +44,41 @@
     <button class="btn primary">Crear {{ drivers[kind].label }}</button>
   </div>
 </form>
+
+{% if kind == "kvm" %}
+<section class="card edit-form network-create" id="network-create" hidden>
+  <h2>Crear red de libvirt</h2>
+  <div class="field-row">
+    <div class="field">
+      <label for="net-name">Nombre</label>
+      <input id="net-name" placeholder="red-nueva">
+    </div>
+    <div class="field">
+      <label for="net-mode">Modo</label>
+      <select id="net-mode">
+        <option value="nat">NAT (salida a Internet)</option>
+        <option value="isolated">Aislada</option>
+      </select>
+    </div>
+  </div>
+  <div class="field">
+    <label for="net-address">Dirección del host / máscara</label>
+    <input id="net-address" placeholder="10.30.0.1/24">
+    <small class="muted">La IP del host dentro de la red, con su prefijo. Ej. 10.30.0.1/24.</small>
+  </div>
+  <label class="checkbox"><input type="checkbox" id="net-dhcp" checked> Repartir IP por DHCP</label>
+  <label class="checkbox"><input type="checkbox" id="net-autostart"> Arrancar con el host</label>
+  <div class="form-foot">
+    <button class="btn primary" type="button" id="net-create-submit">Crear red</button>
+    <button class="btn" type="button" id="net-create-cancel">Cancelar</button>
+  </div>
+  <div class="alert error" id="net-create-error" hidden></div>
+</section>
+
+<script type="application/json" id="network-options">{{ network_options | tojson }}</script>
+<script type="application/json" id="network-default">{{ default_network | tojson }}</script>
+<script type="application/json" id="network-initial">{{ initial_networks | tojson }}</script>
+<script src="/static/new-networks.js"></script>
+{% endif %}
 {% endif %}
 {% endblock %}

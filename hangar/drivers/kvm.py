@@ -234,24 +234,51 @@ def _parse_disks(text: str, pools: set[str], default_pool: str) -> list[dict]:
     return disks
 
 
-def _parse_networks(text: str, networks: set[str]) -> list[dict]:
-    """'red[:modelo]' por línea → redes validadas."""
-    result = []
-    for raw in (text or "").splitlines():
-        line = raw.strip()
+def _parse_networks(text: str, networks: set[str], bridges: set[str]) -> list[dict]:
+    """Lista JSON de fuentes (o líneas «red[:modelo]» en formato antiguo)."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    items = []
+    if raw.startswith("["):
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            raise DriverError("Redes: la lista enviada no es válida.") from None
+        if not isinstance(data, list):
+            raise DriverError("Redes: la lista enviada no es válida.")
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            source = str(item.get("source", ""))
+            model = str(item.get("model", "virtio"))
+            kind, _, name = source.partition(":")
+            if kind not in ("network", "bridge") or not name:
+                raise DriverError("Redes: elige una red o un bridge válido.")
+            if kind == "network" and name not in networks:
+                raise DriverError(f"Red «{name}»: no existe esa red de libvirt.")
+            if kind == "bridge" and name not in bridges:
+                raise DriverError(f"Bridge «{name}»: no existe en el host.")
+            if model not in NETWORK_MODELS:
+                raise DriverError(f"Red «{name}»: modelo no válido "
+                                  f"({', '.join(NETWORK_MODELS)})")
+            items.append({"type": kind, "name": name, "model": model})
+        return items
+
+    # Compatibilidad con el formato de texto anterior: red[:modelo].
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        parts = [part.strip() for part in line.split(":", 1)]
-        network = parts[0]
-        model = parts[1] if len(parts) > 1 and parts[1] else "virtio"
-        if network not in networks:
-            raise DriverError(f"Red «{network}»: no existe esa red de libvirt")
+        name, _, model = line.partition(":")
+        model = model or "virtio"
+        if name not in networks:
+            raise DriverError(f"Red «{name}»: no existe esa red de libvirt")
         if model not in NETWORK_MODELS:
-            raise DriverError(f"Red «{network}»: modelo no válido "
+            raise DriverError(f"Red «{name}»: modelo no válido "
                               f"({', '.join(NETWORK_MODELS)})")
-        result.append({"network": network, "model": model})
-    return result
-
+        items.append({"type": "network", "name": name, "model": model})
+    return items
 
 class KvmDriver(Driver):
     kind = "kvm"
@@ -766,6 +793,21 @@ class KvmDriver(Driver):
             return []
         return sorted(line.strip() for line in out.splitlines()[2:] if line.strip())
 
+    def network_choices(self) -> tuple[list[dict], str]:
+        """Opciones para el desplegable de redes del alta y la red por defecto."""
+        conn = self._conn()
+        try:
+            networks = sorted(n.name() for n in conn.listAllNetworks())
+        finally:
+            conn.close()
+        bridges = host_bridges()
+        options = [{"value": f"network:{name}", "label": f"Red {name}"} for name in networks]
+        options += [{"value": f"bridge:{name}", "label": f"Bridge {name}"}
+                    for name in bridges if name not in networks]
+        default = (f"network:default" if "default" in networks else
+                   (options[0]["value"] if options else ""))
+        return options, default
+
     def create_fields(self) -> list[Field]:
         conn = self._conn()
         try:
@@ -775,12 +817,10 @@ class KvmDriver(Driver):
                         for path, label in self._disk_images(conn)]
             origins += [(f"clone:{d.name()}", f"Clonar · {d.name()}")
                         for d in sorted(conn.listAllDomains(), key=lambda d: d.name())]
-            networks = sorted(n.name() for n in conn.listAllNetworks())
             pools = self._pool_names(conn)
         finally:
             conn.close()
         default_pool = "default" if "default" in pools else (pools[0] if pools else "default")
-        default_network = "default" if "default" in networks else (networks[0] if networks else "")
         return [
             Field("name", "Nombre", "", required=True, placeholder="srv-nuevo"),
             Field("origin", "Origen", "", "select", options=origins,
@@ -801,10 +841,6 @@ class KvmDriver(Driver):
                   placeholder="20:default:qcow2\n50:default:qcow2",
                   help="tamaño_GiB[:pool[:formato]]. La primera línea es el disco del sistema. "
                        f"Pools activos: {', '.join(pools) or 'ninguno'}. Formatos: qcow2, raw."),
-            Field("networks", "Redes (una por línea)", f"{default_network}:virtio" if default_network else "",
-                  "textarea", placeholder="default:virtio\nred-privada:e1000e",
-                  help="red[:modelo]. La primera es la red principal; deja el campo vacío para "
-                       "crear la VM sin red. Modelos: virtio, e1000e, rtl8139."),
         ]
 
     def prepare_create(self, values: dict[str, str]) -> dict:
@@ -812,6 +848,7 @@ class KvmDriver(Driver):
         try:
             existing = [d.name() for d in conn.listAllDomains()]
             networks = {n.name() for n in conn.listAllNetworks()}
+            bridges = set(host_bridges())
             pools = set(self._pool_names(conn))
             default_pool = "default" if "default" in pools else (sorted(pools)[0] if pools else "default")
             isos = [path for path, _ in self._isos(conn)]
@@ -830,11 +867,11 @@ class KvmDriver(Driver):
             if kind == "iso" and target in isos:
                 spec["iso"] = target
                 spec["disks"] = _parse_disks(values.get("disks", ""), pools, default_pool)
-                spec["networks"] = _parse_networks(values.get("networks", ""), networks)
+                spec["networks"] = _parse_networks(values.get("networks", ""), networks, bridges)
             elif kind == "image" and target in images:
                 spec["image"] = target
                 spec["disks"] = _parse_disks(values.get("disks", ""), pools, default_pool)
-                spec["networks"] = _parse_networks(values.get("networks", ""), networks)
+                spec["networks"] = _parse_networks(values.get("networks", ""), networks, bridges)
                 spec["cloud_init"] = values.get("cloud_init", "").strip()
             elif kind == "clone" and target in existing:
                 if conn.lookupByName(target).isActive():
@@ -974,7 +1011,7 @@ class KvmDriver(Driver):
             command += ["--disk", f"path={seed},device=cdrom"]
         command += ["--import", "--osinfo", osinfo]
         for network in spec["networks"]:
-            command += ["--network", f"network={network['network']},model={network['model']}"]
+            command += ["--network", f"{network['type']}={network['name']},model={network['model']}"]
         command += ["--graphics", "spice", "--noautoconsole"]
         run_streaming(command, log)
         log("VM creada desde la imagen; si cloud-init está bien configurado, "
@@ -1016,7 +1053,7 @@ class KvmDriver(Driver):
                                   f"format={disk['format']}"]
         command += ["--cdrom", spec["iso"], "--osinfo", osinfo]
         for network in spec["networks"]:
-            command += ["--network", f"network={network['network']},model={network['model']}"]
+            command += ["--network", f"{network['type']}={network['name']},model={network['model']}"]
         command += ["--graphics", "spice", "--noautoconsole"]
         run_streaming(command, log)
         log("VM creada y arrancada desde la ISO: conéctate con virt-manager o "

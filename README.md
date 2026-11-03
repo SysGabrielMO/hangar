@@ -283,7 +283,8 @@ Hangar se pierde el registro, no la máquina).
   origen debe estar apagada). Si osinfo no detecta la ISO, indica el sistema
   (p. ej. `debian13`, `win11`) para que elija los dispositivos adecuados.
   El formulario admite **varios discos** (`20:default:qcow2`, uno por línea) y
-  **varias redes** (`default:virtio`, una por línea). También puede arrancar
+  **varias redes** con desplegables de red/bridge y modelo de tarjeta; también
+  puedes crear una red de libvirt nueva sin salir del alta. Además puede arrancar
   una **imagen qcow2 existente** (por ejemplo, una cloud image): crea un disco
   diferencial de ese tamaño. Si pegas un **cloud-config en YAML**, Hangar
   genera la ISO seed (NoCloud) y la conecta como CD-ROM para que la VM se

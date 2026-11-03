@@ -101,3 +101,14 @@ def test_defined_ip_saved_and_validated(client, monkeypatch):
                            data={"ip": "no-es-ip"}, follow_redirects=False)
     assert response.status_code == 303
     assert saved == ["10.10.100.50/24"]
+
+
+def test_network_create_json_error(client):
+    response = client.post(
+        "/networks/libvirt/create",
+        data={"name": "nombre con espacios", "mode": "nat", "address": "10.30.0.1/24"},
+        headers={"accept": "application/json"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    assert "Nombre" in response.json()["detail"]

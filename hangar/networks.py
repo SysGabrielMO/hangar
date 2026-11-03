@@ -12,7 +12,7 @@ import docker
 import libvirt
 from docker.errors import DockerException
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from . import db
 from .common import list_all, templates
@@ -144,8 +144,9 @@ def _check_overlap(subnet: ipaddress.IPv4Network, name: str) -> None:
 
 
 @router.post("/networks/libvirt/create")
-def create_libvirt(name: str = Form(""), mode: str = Form("nat"), address: str = Form(""),
-                   dhcp: str = Form(""), autostart: str = Form("")):
+def create_libvirt(request: Request, name: str = Form(""), mode: str = Form("nat"),
+                   address: str = Form(""), dhcp: str = Form(""), autostart: str = Form("")):
+    wants_json = "application/json" in request.headers.get("accept", "")
     try:
         if not NAME_RE.match(name):
             raise DriverError("Nombre: letras, números, guiones o puntos (máx. 31).")
@@ -186,9 +187,16 @@ def create_libvirt(name: str = Form(""), mode: str = Form("nat"), address: str =
         finally:
             conn.close()
     except DriverError as e:
+        if wants_json:
+            return JSONResponse({"detail": str(e)}, status_code=400)
         return _back(error=str(e))
     except libvirt.libvirtError as e:
+        if wants_json:
+            return JSONResponse({"detail": str(e)}, status_code=400)
         return _back(error=str(e))
+    if wants_json:
+        return JSONResponse({"name": name, "mode": mode, "subnet": str(subnet),
+                             "dhcp": dhcp_note})
     kind = "NAT" if mode == "nat" else "aislada"
     return _back(f"Red «{name}» creada: {kind}, {subnet}, {dhcp_note}.")
 
