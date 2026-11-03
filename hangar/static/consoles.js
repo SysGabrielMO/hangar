@@ -122,6 +122,7 @@
     });
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
+    attachTerminalClipboard(term);
     term.open(state.pane);
     state.term = term;
     state.fit = fit;

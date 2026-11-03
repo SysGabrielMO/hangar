@@ -224,3 +224,78 @@ def test_create_uses_all_disks_and_networks(monkeypatch):
     assert captured.count("--network") == 2
     assert "pool=default,size=20,format=qcow2" in captured
     assert "network=red-privada,model=e1000e" in captured
+
+
+def test_create_from_qcow2_image_with_cloud_init(tmp_path, monkeypatch):
+    from hangar.drivers import kvm as kvm_module
+
+    base = tmp_path / "cloud.qcow2"
+    base.write_bytes(b"fake qcow2")
+
+    class BaseVol:
+        def info(self):
+            return (0, 3 * 1024 ** 3, 0)
+
+        def storagePoolLookupByVolume(self):
+            return pool
+
+    class TargetVol:
+        def path(self):
+            return "/var/lib/libvirt/images/test.qcow2"
+
+        def info(self):
+            return (0, 20 * 1024 ** 3, 0)
+
+        def resize(self, size):
+            pass
+
+        def delete(self, flags=0):
+            pass
+
+    class Pool:
+        def listAllVolumes(self):
+            return []
+
+        def createXML(self, xml, flags=0):
+            self.created = xml
+            return TargetVol()
+
+    pool = Pool()
+
+    class CreatedDomain:
+        def UUIDString(self):
+            return "uuid-cloud"
+
+    class Conn:
+        def storageVolLookupByPath(self, path):
+            return BaseVol()
+
+        def lookupByName(self, name):
+            return CreatedDomain()
+
+        def close(self):
+            pass
+
+    captured = []
+
+    def fake_run(cmd, log, timeout=3600):
+        captured.extend(cmd)
+
+    driver = kvm_module.KvmDriver()
+    monkeypatch.setattr(driver, "_conn", lambda: Conn())
+    monkeypatch.setattr(kvm_module, "run_streaming", fake_run)
+
+    result = driver._create_from_image({
+        "name": "cloud-test", "vcpus": 2, "memory_mib": 2048,
+        "image": str(base),
+        "disks": [{"size_gib": 20, "pool": "default", "format": "qcow2"}],
+        "networks": [{"network": "default", "model": "virtio"}],
+        "cloud_init": "/var/lib/libvirt/images/seed.iso",
+        "osinfo": "debian13",
+    }, lambda line: None)
+
+    assert result == "uuid-cloud"
+    assert "backingStore" in pool.created
+    assert "--import" in captured
+    assert "path=/var/lib/libvirt/images/test.qcow2,format=qcow2" in captured
+    assert "path=/var/lib/libvirt/images/seed.iso,device=cdrom" in captured

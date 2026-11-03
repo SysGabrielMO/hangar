@@ -95,7 +95,7 @@ def main() -> int:
 
     from PySide6.QtCore import QStandardPaths, Qt, QTimer, QUrl
     from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QShortcut
-    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
     from PySide6.QtWebEngineWidgets import QWebEngineView
     from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
@@ -145,6 +145,11 @@ def main() -> int:
             super().__init__()
             self.view = QWebEngineView(self)
             self.view.setPage(Page(profile, self.view))
+            # Ctrl+Shift+C/V de la consola: permitir que xterm lea/escriba el portapapeles.
+            self.view.settings().setAttribute(
+                QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
+            self.view.settings().setAttribute(
+                QWebEngineSettings.WebAttribute.JavascriptCanPaste, True)
             self.view.titleChanged.connect(self.setWindowTitle)
             if os.environ.get("HANGAR_DEBUG"):
                 self.view.loadFinished.connect(lambda ok: print(

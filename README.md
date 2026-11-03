@@ -232,16 +232,18 @@ sin `--memory`), se muestra el consumo en MiB/GiB y «sin límite configurado».
 
 ## Consola
 
-- **Consolas** (máquinas encendidas): desde la ficha, «Consola» abre un espacio
-  de trabajo con [xterm.js](https://xtermjs.org/) (incluido en
-  `hangar/static/vendor`, funciona sin Internet) y **pestañas**. Puedes añadir
-  varias máquinas con el desplegable «Añadir consola»; la URL guarda las
-  abiertas (`/consoles?m=...`) y el navegador las recuerda al volver desde
-  otra página, así que no se pierden al ir a mirar el estado de otra máquina.
+- **Consola** (máquinas encendidas): el botón de la ficha abre un **cajón
+  inferior** con [xterm.js](https://xtermjs.org/) (incluido en
+  `hangar/static/vendor`, funciona sin Internet). Se puede ocultar y volver a
+  mostrar sin salir de la ficha, así que sigues viendo los datos de la máquina.
   KVM usa la consola serie (`virsh console`), LXC `lxc-attach` y Docker
   `docker exec -it`.
-- **Consola serie** (KVM): enlace en la ficha para abrir la consola individual
-  con el botón «Activar consola serie».
+- **Copiar y pegar** en cualquier terminal: `Ctrl+Shift+C` y `Ctrl+Shift+V`,
+  como en Terminator.
+- **Varias consolas**: el enlace «Abrir en pestañas» del cajón (o **Consolas**
+  en la barra superior) abre un espacio con varias terminales en pestañas.
+  Puedes añadir máquinas con «Añadir consola»; la URL y el navegador recuerdan
+  las abiertas.
 - **Pantalla** (VMs con SPICE/VNC): abre `virt-viewer` en tu escritorio.
 
 ## Red
@@ -275,7 +277,10 @@ Hangar se pierde el registro, no la máquina).
   origen debe estar apagada). Si osinfo no detecta la ISO, indica el sistema
   (p. ej. `debian13`, `win11`) para que elija los dispositivos adecuados.
   El formulario admite **varios discos** (`20:default:qcow2`, uno por línea) y
-  **varias redes** (`default:virtio`, una por línea).
+  **varias redes** (`default:virtio`, una por línea). También puede arrancar
+  una **imagen qcow2 existente** (por ejemplo, una cloud image): crea un disco
+  diferencial de ese tamaño y, si eliges una **ISO cloud-init**, la conecta
+  como CD-ROM para que la VM se configure al arrancar.
 - **LXC**: `lxc-create -t download`; la lista de imágenes se lee del servidor
   de linuxcontainers.org.
 - **Docker**: si la imagen no está, se descarga antes de crear.
@@ -367,3 +372,4 @@ consolas. GitHub Actions las ejecuta en cada push y pull request
       está encendida; LXC con `lxc-snapshot`, contenedor apagado)
 - [x] Métricas (gráficas de CPU/RAM)
 - [x] Tests automáticos y CI
+- [x] Crear desde imagen qcow2 con cloud-init

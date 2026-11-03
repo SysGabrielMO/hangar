@@ -338,3 +338,97 @@ function initMetrics() {
 }
 
 initMetrics();
+
+// --- Cajón de consola de la ficha -----------------------------------------
+
+function initConsoleDrawer() {
+  const toggle = document.getElementById("console-toggle");
+  const drawer = document.getElementById("console-drawer");
+  const host = document.getElementById("console-drawer-term");
+  const status = document.getElementById("console-drawer-status");
+  const close = document.getElementById("console-drawer-close");
+  if (!toggle || !drawer || !host) return;
+  if (typeof Terminal === "undefined" || typeof FitAddon === "undefined") return;
+
+  let term = null;
+  let fit = null;
+  let ws = null;
+
+  const sendResize = () => {
+    if (term && ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "resize", rows: term.rows, cols: term.cols }));
+    }
+  };
+
+  const ensureTerminal = () => {
+    if (term) return;
+    term = new Terminal({
+      cursorBlink: true, fontSize: 14, scrollback: 5000,
+      fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, monospace',
+      theme: { background: "#0b0e12", foreground: "#e6e8eb", cursor: "#e6e8eb" },
+    });
+    fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    attachTerminalClipboard(term);
+    term.open(host);
+
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    ws = new WebSocket(`${proto}://${location.host}${toggle.dataset.consoleUrl}`);
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => {
+      status.textContent = "Conectado";
+      requestAnimationFrame(() => {
+        fit.fit();
+        sendResize();
+        term.focus();
+      });
+    };
+    ws.onmessage = (event) => term.write(
+      typeof event.data === "string" ? event.data : new Uint8Array(event.data),
+    );
+    ws.onclose = () => {
+      status.textContent = "Desconectado";
+      term.options.cursorBlink = false;
+    };
+    term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "input", data }));
+      }
+    });
+  };
+
+  const fitTerminal = () => {
+    if (!term || drawer.hidden) return;
+    fit.fit();
+    sendResize();
+  };
+
+  const open = () => {
+    drawer.hidden = false;
+    document.body.classList.add("console-open");
+    toggle.setAttribute("aria-expanded", "true");
+    toggle.textContent = "Ocultar consola";
+    ensureTerminal();
+    requestAnimationFrame(() => {
+      fitTerminal();
+      term.focus();
+    });
+  };
+
+  const hide = () => {
+    drawer.hidden = true;
+    document.body.classList.remove("console-open");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "Consola";
+  };
+
+  toggle.addEventListener("click", () => {
+    if (drawer.hidden) open();
+    else hide();
+  });
+  close.addEventListener("click", hide);
+  window.addEventListener("resize", fitTerminal);
+  if (new URLSearchParams(location.search).get("console") === "1") open();
+}
+
+initConsoleDrawer();

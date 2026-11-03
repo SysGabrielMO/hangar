@@ -13,6 +13,7 @@ import subprocess
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from pathlib import Path
 
 import libvirt
 
@@ -701,6 +702,24 @@ class KvmDriver(Driver):
                     isos.append((vol.path(), f"{vol.name()} ({pool.name()})"))
         return sorted(isos, key=lambda i: i[1].lower())
 
+    def _disk_images(self, conn) -> list[tuple[str, str]]:
+        """(ruta, nombre) de las imágenes qcow2 de todos los pools activos."""
+        images = []
+        for pool in conn.listAllStoragePools(libvirt.VIR_CONNECT_LIST_STORAGE_POOLS_ACTIVE):
+            try:
+                pool.refresh(0)
+            except libvirt.libvirtError:
+                pass
+            for vol in pool.listAllVolumes():
+                if not vol.name().lower().endswith(".qcow2"):
+                    continue
+                try:
+                    size = vol.info()[1]
+                except libvirt.libvirtError:
+                    size = 0
+                images.append((vol.path(), f"{vol.name()} ({pool.name()}, {human_bytes(size)})"))
+        return sorted(images, key=lambda item: item[1].lower())
+
     @staticmethod
     @functools.cache
     def _osinfo_ids() -> list[str]:
@@ -714,7 +733,10 @@ class KvmDriver(Driver):
     def create_fields(self) -> list[Field]:
         conn = self._conn()
         try:
-            origins = [(f"iso:{path}", f"ISO · {label}") for path, label in self._isos(conn)]
+            isos = self._isos(conn)
+            origins = [(f"iso:{path}", f"ISO · {label}") for path, label in isos]
+            origins += [(f"image:{path}", f"Imagen · {label}")
+                        for path, label in self._disk_images(conn)]
             origins += [(f"clone:{d.name()}", f"Clonar · {d.name()}")
                         for d in sorted(conn.listAllDomains(), key=lambda d: d.name())]
             networks = sorted(n.name() for n in conn.listAllNetworks())
@@ -726,8 +748,13 @@ class KvmDriver(Driver):
         return [
             Field("name", "Nombre", "", required=True, placeholder="srv-nuevo"),
             Field("origin", "Origen", "", "select", options=origins,
-                  help="Instalar desde una ISO o clonar una VM existente (debe estar apagada). "
-                       "Al clonar se conservan sus discos y redes."),
+                  help="Instalar desde una ISO, arrancar una imagen qcow2 (cloud) o clonar "
+                       "una VM existente (debe estar apagada). Al clonar se conservan sus "
+                       "discos y redes."),
+            Field("cloud_init", "Cloud-init (ISO)", "", "select",
+                  options=[("", "— Sin cloud-init —")] + [(path, label) for path, label in isos],
+                  help="Con una imagen qcow2, se conecta como CD-ROM para que cloud-init "
+                       "configure la VM (usuario, SSH, red…)."),
             Field("osinfo", "Sistema operativo (osinfo)", "", suggestions=self._osinfo_ids(),
                   placeholder="autodetectar",
                   help="Vacío = detectarlo de la ISO. Para Windows pon p. ej. win11."),
@@ -750,6 +777,8 @@ class KvmDriver(Driver):
             networks = {n.name() for n in conn.listAllNetworks()}
             pools = set(self._pool_names(conn))
             default_pool = "default" if "default" in pools else (sorted(pools)[0] if pools else "default")
+            isos = [path for path, _ in self._isos(conn)]
+            images = [path for path, _ in self._disk_images(conn)]
             spec = {
                 "name": check_name(values, existing),
                 "vcpus": parse_number(values, "vcpus", "vCPU", minimum=1),
@@ -761,10 +790,18 @@ class KvmDriver(Driver):
 
             origin = values.get("origin", "")
             kind, _, target = origin.partition(":")
-            if kind == "iso" and target in [p for p, _ in self._isos(conn)]:
+            if kind == "iso" and target in isos:
                 spec["iso"] = target
                 spec["disks"] = _parse_disks(values.get("disks", ""), pools, default_pool)
                 spec["networks"] = _parse_networks(values.get("networks", ""), networks)
+            elif kind == "image" and target in images:
+                spec["image"] = target
+                spec["disks"] = _parse_disks(values.get("disks", ""), pools, default_pool)
+                spec["networks"] = _parse_networks(values.get("networks", ""), networks)
+                cloud_init = values.get("cloud_init", "").strip()
+                if cloud_init and cloud_init not in isos:
+                    raise DriverError("Cloud-init: elige una ISO de la lista.")
+                spec["cloud_init"] = cloud_init
             elif kind == "clone" and target in existing:
                 if conn.lookupByName(target).isActive():
                     raise DriverError(f"Apaga «{target}» antes de clonarla.")
@@ -773,13 +810,93 @@ class KvmDriver(Driver):
                 spec["disks"] = []
                 spec["networks"] = []
             else:
-                raise DriverError("Elige una ISO o una VM para clonar.")
+                raise DriverError("Elige una ISO, una imagen qcow2 o una VM para clonar.")
             return spec
+        finally:
+            conn.close()
+
+    def _create_from_image(self, spec: dict, log) -> str:
+        """Crea una VM desde una imagen qcow2 (cloud) con cloud-init opcional."""
+        base = Path(spec["image"])
+        if not base.is_file():
+            raise DriverError(f"No existe la imagen base: {base}")
+
+        conn = self._conn()
+        target_vol = None
+        try:
+            try:
+                base_vol = conn.storageVolLookupByPath(str(base))
+            except libvirt.libvirtError as e:
+                raise DriverError(f"La imagen base no está en un pool de libvirt: {base}") from e
+            base_bytes = base_vol.info()[1]
+            pool = base_vol.storagePoolLookupByVolume()
+
+            size = int(spec["disks"][0]["size_gib"])
+            minimum = (base_bytes + GIB - 1) // GIB
+            if base_bytes and size < minimum:
+                raise DriverError(f"El primer disco debe ser de al menos {minimum} GiB "
+                                  f"(la imagen base ocupa {human_bytes(base_bytes)}).")
+
+            existing = {vol.name() for vol in pool.listAllVolumes()}
+            name = f"{spec['name']}.qcow2"
+            index = 2
+            while name in existing:
+                name = f"{spec['name']}-{index}.qcow2"
+                index += 1
+
+            volume_xml = ET.Element("volume")
+            ET.SubElement(volume_xml, "name").text = name
+            ET.SubElement(volume_xml, "capacity", unit="GiB").text = str(size)
+            ET.SubElement(volume_xml, "allocation", unit="GiB").text = "0"
+            ET.SubElement(ET.SubElement(volume_xml, "target"), "format", type="qcow2")
+            backing = ET.SubElement(volume_xml, "backingStore")
+            ET.SubElement(backing, "path").text = str(base)
+            ET.SubElement(backing, "format", type="qcow2")
+            target_vol = pool.createXML(ET.tostring(volume_xml, encoding="unicode"), 0)
+            if target_vol.info()[1] != size * GIB:
+                target_vol.resize(size * GIB)
+            target = target_vol.path()
+            log(f"Disco diferencial creado en {target} sobre {base}")
+        except libvirt.libvirtError as e:
+            if target_vol is not None:
+                try:
+                    target_vol.delete(0)
+                except libvirt.libvirtError:
+                    pass
+            raise DriverError(str(e)) from e
+        finally:
+            conn.close()
+
+        osinfo = f"name={spec['osinfo']}" if spec["osinfo"] else "detect=on,require=off"
+        command = [
+            "virt-install", "--connect", self.uri, "--name", spec["name"],
+            "--vcpus", str(spec["vcpus"]), "--memory", str(spec["memory_mib"]),
+            "--disk", f"path={target},format=qcow2",
+        ]
+        for disk in spec["disks"][1:]:
+            command += ["--disk", f"pool={disk['pool']},size={disk['size_gib']},"
+                                  f"format={disk['format']}"]
+        cloud_init = spec.get("cloud_init", "")
+        if cloud_init:
+            log(f"Cloud-init: {cloud_init}")
+            command += ["--disk", f"path={cloud_init},device=cdrom"]
+        command += ["--import", "--osinfo", osinfo]
+        for network in spec["networks"]:
+            command += ["--network", f"network={network['network']},model={network['model']}"]
+        command += ["--graphics", "spice", "--noautoconsole"]
+        run_streaming(command, log)
+        log("VM creada desde la imagen; si cloud-init está bien configurado, "
+            "aplicará usuario, claves y red al arrancar.")
+        conn = self._conn()
+        try:
+            return conn.lookupByName(spec["name"]).UUIDString()
         finally:
             conn.close()
 
     def create(self, spec: dict, log) -> str:
         name = spec["name"]
+        if "image" in spec:
+            return self._create_from_image(spec, log)
         if "clone" in spec:
             run_streaming(["virt-clone", "--connect", self.uri, "--original", spec["clone"],
                            "--name", name, "--auto-clone"], log)

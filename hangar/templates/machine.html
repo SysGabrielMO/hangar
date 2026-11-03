@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% from "_fields.html" import render_fields %}
 {% block title %}{{ m.name }} · Hangar{% endblock %}
+{% block head %}
+{% if m.state == "running" %}<link rel="stylesheet" href="/static/vendor/xterm/xterm.css">{% endif %}
+{% endblock %}
 {% block content %}
 {% set base_url = "/m/" ~ m.kind ~ "/" ~ (m.id | urlencode) %}
 
@@ -19,12 +22,9 @@
   </div>
   <div class="actions">
     {% if m.state == "running" %}
-    <a class="btn" href="/consoles?m={{ (m.kind ~ '/' ~ m.id) | urlencode }}"
-       title="Abrir la consola, con pestañas para varias máquinas">Consola</a>
-    {% if driver.can_enable_serial %}
-    <a class="muted small" href="{{ base_url }}/console"
-       title="Consola individual con la opción de activar la consola serie">Consola serie</a>
-    {% endif %}
+    <button class="btn" type="button" id="console-toggle" aria-expanded="false"
+            data-console-url="/m/{{ m.kind }}/{{ m.id | urlencode }}/console/ws"
+            title="Abrir u ocultar la consola sin salir de la ficha">Consola</button>
     {% endif %}
     {% if m.display %}
     <form method="post" action="{{ base_url }}/display"
@@ -393,6 +393,22 @@
   <h2>{{ m.raw_label }}</h2>
   <pre class="raw">{{ m.raw_config }}</pre>
 </section>
+{% endif %}
+
+{% if m.state == "running" %}
+<section class="console-drawer" id="console-drawer" hidden aria-label="Consola de {{ m.name }}">
+  <div class="console-drawer-bar">
+    <span class="dot running"></span>
+    <strong>{{ m.name }}</strong>
+    <span class="muted small" id="console-drawer-status">Conectando…</span>
+    <a class="muted small" href="/consoles?m={{ (m.kind ~ '/' ~ m.id) | urlencode }}">Abrir en pestañas</a>
+    <button class="btn small" type="button" id="console-drawer-close">Cerrar</button>
+  </div>
+  <div class="console-drawer-term" id="console-drawer-term"></div>
+</section>
+<script src="/static/vendor/xterm/xterm.js"></script>
+<script src="/static/vendor/xterm/addon-fit.js"></script>
+<script src="/static/xterm-keys.js"></script>
 {% endif %}
 
 {% endblock %}

@@ -263,6 +263,27 @@ pre.raw { margin: 0; padding: 14px; background: var(--code-bg); border-radius: 8
 }
 .toast.error { border-left-color: var(--danger); }
 
+/* Cajón de consola de la ficha */
+body.console-open { padding-bottom: min(48vh, 520px); }
+.console-drawer {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
+  height: min(45vh, 480px); min-height: 240px;
+  display: flex; flex-direction: column;
+  background: #0b0e12; color: #e6e8eb;
+  border-top: 1px solid #2a3039;
+  box-shadow: 0 -10px 28px rgba(0, 0, 0, .28);
+}
+.console-drawer[hidden] { display: none; }
+.console-drawer-bar {
+  display: flex; align-items: center; gap: 10px; flex: none;
+  padding: 6px 12px; background: #171b21; border-bottom: 1px solid #2a3039;
+}
+.console-drawer-bar .muted { color: #8b939e; }
+.console-drawer-bar a { color: #8bb4ff; margin-left: auto; }
+.console-drawer-bar .btn { background: #232933; border-color: #2a3039; color: #e6e8eb; }
+.console-drawer-term { flex: 1; min-height: 0; padding: 4px 6px; }
+.console-drawer-term .xterm { height: 100%; }
+
 /* Pestaña Rendimiento */
 .metrics-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .metrics-head h2 { margin-bottom: 12px; }
@@ -284,4 +305,8 @@ pre.raw { margin: 0; padding: 14px; background: var(--code-bg); border-radius: 8
   .grid, .grid.notes { grid-template-columns: 1fr; }
   .toasts { left: 16px; right: 16px; bottom: 16px; }
   .toast { max-width: none; }
+  .console-drawer { height: 55vh; max-height: 60vh; }
+  body.console-open { padding-bottom: 58vh; }
+  .console-drawer-bar { gap: 6px; padding: 6px 8px; }
+  .console-drawer-bar a { margin-left: 0; }
 }
