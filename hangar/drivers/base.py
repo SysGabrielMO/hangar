@@ -98,6 +98,15 @@ class Interface:
     set_ip_hint: str = ""     # cómo se aplicará el cambio de IP
 
 
+@dataclass
+class Usage:
+    """Consumo instantáneo de una máquina (para la pestaña Rendimiento)."""
+    state: str = "unknown"
+    cpu_time: float = 0.0     # segundos de CPU acumulados (para calcular el %)
+    mem_used: int = 0         # bytes
+    mem_limit: int = 0        # bytes; 0 = sin límite
+
+
 class Driver:
     kind: str = ""
     label: str = ""
