@@ -393,10 +393,29 @@
 </div>
 
 {% elif tab == "config" %}
+{% if tab_error %}<div class="alert error">{{ tab_error }}</div>{% endif %}
 <section class="card">
   <h2>{{ m.raw_label }}</h2>
   <pre class="raw">{{ m.raw_config }}</pre>
 </section>
+{% if m.kind == "kvm" and not tab_error %}
+<section class="card">
+  <h2>Agente QEMU</h2>
+  {% if has_agent %}
+  <p class="muted">El canal <code>org.qemu.guest_agent.0</code> ya está configurado.</p>
+  {% else %}
+  <p class="muted">La VM no tiene el canal del agente. Sin él, Hangar no puede leer
+    las IPs estáticas ni usar el agente para otras tareas.</p>
+  <form method="post" action="{{ base_url }}/agent"
+        data-confirm="¿Añadir el canal del agente? Pulsa otra vez">
+    <button class="btn primary small">Añadir canal del agente</button>
+  </form>
+  {% endif %}
+  <p class="small muted">Dentro de la VM instala y arranca el agente:</p>
+  <pre class="raw small">sudo apt install qemu-guest-agent
+sudo systemctl enable --now qemu-guest-agent</pre>
+</section>
+{% endif %}
 {% endif %}
 
 {% if m.state == "running" %}

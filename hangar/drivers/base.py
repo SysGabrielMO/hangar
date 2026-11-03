@@ -137,6 +137,14 @@ class Driver:
         """Consumo actual (CPU acumulada y memoria) para la pestaña Rendimiento."""
         raise NotImplementedError
 
+    def has_agent(self, machine_id: str) -> bool:
+        """¿Tiene el canal del agente QEMU configurado?"""
+        return False
+
+    def enable_agent(self, machine_id: str) -> list[str]:
+        """Añade el canal org.qemu.guest_agent.0 a la máquina."""
+        raise DriverError("El agente QEMU solo está disponible para máquinas KVM.")
+
     def users(self, machine_id: str) -> list[User]:
         """Usuarios definidos dentro de la máquina (/etc/passwd)."""
         raise NotImplementedError

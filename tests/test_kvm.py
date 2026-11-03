@@ -236,6 +236,8 @@ def test_create_uses_all_disks_and_networks(monkeypatch):
     assert result == "uuid-1"
     assert captured.count("--disk") == 2
     assert captured.count("--network") == 2
+    assert captured.count("--channel") == 1
+    assert any("org.qemu.guest_agent.0" in arg for arg in captured)
     assert "pool=default,size=20,format=qcow2" in captured
     assert "network=red-privada,model=e1000e" in captured
 
@@ -315,3 +317,60 @@ def test_create_from_qcow2_image_with_cloud_init(tmp_path, monkeypatch):
     assert "--import" in captured
     assert "path=/var/lib/libvirt/images/test.qcow2,format=qcow2" in captured
     assert "path=/var/lib/libvirt/images/test-seed.iso,device=cdrom" in captured
+
+
+class AgentDomain:
+    def __init__(self, has_channel=False, active=False):
+        self.has_channel = has_channel
+        self.active = active
+        self.attached = ""
+
+    def XMLDesc(self, flags=0):
+        channel = ("<channel type='unix'><target type='virtio' "
+                   "name='org.qemu.guest_agent.0'/></channel>"
+                   if self.has_channel else "")
+        return f"<domain><devices>{channel}</devices></domain>"
+
+    def isActive(self):
+        return self.active
+
+    def attachDeviceFlags(self, xml, flags):
+        self.attached = xml
+        self.has_channel = True
+
+
+def test_enable_agent_adds_channel(monkeypatch):
+    from hangar.drivers.kvm import KvmDriver
+
+    driver = KvmDriver()
+    dom = AgentDomain()
+
+    class Conn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(driver, "_conn", lambda: Conn())
+    monkeypatch.setattr(driver, "_domain", lambda conn, machine_id: dom)
+
+    assert driver.has_agent("vm-1") is False
+    notes = driver.enable_agent("vm-1")
+    assert "Canal del agente QEMU añadido" in notes[0]
+    assert "org.qemu.guest_agent.0" in dom.attached
+    assert driver.has_agent("vm-1") is True
+
+
+def test_enable_agent_is_idempotent(monkeypatch):
+    from hangar.drivers.kvm import KvmDriver
+
+    driver = KvmDriver()
+    dom = AgentDomain(has_channel=True)
+
+    class Conn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(driver, "_conn", lambda: Conn())
+    monkeypatch.setattr(driver, "_domain", lambda conn, machine_id: dom)
+    assert driver.enable_agent("vm-1") == [
+        "La VM ya tiene el canal del agente QEMU."
+    ]

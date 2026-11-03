@@ -1012,6 +1012,7 @@ class KvmDriver(Driver):
         command += ["--import", "--osinfo", osinfo]
         for network in spec["networks"]:
             command += ["--network", f"{network['type']}={network['name']},model={network['model']}"]
+        command += ["--channel", "unix,target_type=virtio,name=org.qemu.guest_agent.0"]
         command += ["--graphics", "spice", "--noautoconsole"]
         run_streaming(command, log)
         log("VM creada desde la imagen; si cloud-init está bien configurado, "
@@ -1039,6 +1040,8 @@ class KvmDriver(Driver):
             for note in self.update(uuid, {"vcpus": str(spec["vcpus"]),
                                            "memory_mib": str(spec["memory_mib"])}):
                 log(note)
+            for note in self.enable_agent(uuid):
+                log(note)
             return uuid
 
         osinfo = f"name={spec['osinfo']}" if spec["osinfo"] else "detect=on,require=off"
@@ -1054,6 +1057,7 @@ class KvmDriver(Driver):
         command += ["--cdrom", spec["iso"], "--osinfo", osinfo]
         for network in spec["networks"]:
             command += ["--network", f"{network['type']}={network['name']},model={network['model']}"]
+        command += ["--channel", "unix,target_type=virtio,name=org.qemu.guest_agent.0"]
         command += ["--graphics", "spice", "--noautoconsole"]
         run_streaming(command, log)
         log("VM creada y arrancada desde la ISO: conéctate con virt-manager o "
@@ -1163,6 +1167,45 @@ class KvmDriver(Driver):
     def _has_agent(root: ET.Element) -> bool:
         return any(t.get("name") == "org.qemu.guest_agent.0"
                    for t in root.findall("devices/channel/target"))
+
+    def has_agent(self, machine_id: str) -> bool:
+        conn = self._conn()
+        try:
+            dom = self._domain(conn, machine_id)
+            return self._has_agent(ET.fromstring(dom.XMLDesc(XML_FLAGS)))
+        finally:
+            conn.close()
+
+    def enable_agent(self, machine_id: str) -> list[str]:
+        conn = self._conn()
+        try:
+            dom = self._domain(conn, machine_id)
+            root = ET.fromstring(dom.XMLDesc(XML_FLAGS))
+            if self._has_agent(root):
+                return ["La VM ya tiene el canal del agente QEMU."]
+            channel = ET.Element("channel", type="unix")
+            ET.SubElement(channel, "source", mode="bind")
+            ET.SubElement(channel, "target", type="virtio",
+                          name="org.qemu.guest_agent.0")
+            xml = ET.tostring(channel, encoding="unicode")
+            note = "."
+            if dom.isActive():
+                try:
+                    dom.attachDeviceFlags(xml, libvirt.VIR_DOMAIN_AFFECT_CONFIG
+                                          | libvirt.VIR_DOMAIN_AFFECT_LIVE)
+                    note = (" en caliente. Reinicia qemu-guest-agent dentro de la VM "
+                            "(o la VM) para que lo use.")
+                except libvirt.libvirtError:
+                    dom.attachDeviceFlags(xml, libvirt.VIR_DOMAIN_AFFECT_CONFIG)
+                    note = (": se aplicará al apagar y volver a arrancar la VM.")
+            else:
+                dom.attachDeviceFlags(xml, libvirt.VIR_DOMAIN_AFFECT_CONFIG)
+                note = ": se aplicará al arrancar la VM."
+            return [f"Canal del agente QEMU añadido{note}"]
+        except libvirt.libvirtError as e:
+            raise DriverError(str(e)) from e
+        finally:
+            conn.close()
 
     def interfaces(self, machine_id: str) -> list[Interface]:
         conn = self._conn()

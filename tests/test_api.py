@@ -112,3 +112,15 @@ def test_network_create_json_error(client):
     )
     assert response.status_code == 400
     assert "Nombre" in response.json()["detail"]
+
+
+def test_enable_agent_route(client, monkeypatch):
+    class FakeDriver:
+        kind = "fake"
+
+        def enable_agent(self, machine_id):
+            return ["Canal añadido."]
+
+    monkeypatch.setitem(DRIVERS, "fake", FakeDriver())
+    response = client.post("/m/fake/vm-1/agent", follow_redirects=False)
+    assert response.status_code == 303

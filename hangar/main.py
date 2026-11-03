@@ -226,7 +226,7 @@ def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
 
     ctx = {"users": [], "fields": [], "plan": None, "snaps": [], "ifaces": [],
            "iface_fields": [], "disks": [], "disk_fields": [], "tab_error": None,
-           "usage": None}
+           "usage": None, "has_agent": False}
     try:
         if tab == "snapshots" and not driver.no_snapshots_reason:
             ctx["snaps"] = driver.snapshots(machine_id)
@@ -251,6 +251,8 @@ def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
             else:
                 ctx["disks"] = driver.disks(machine_id)
                 ctx["disk_fields"] = driver.disk_fields(machine_id)
+        elif tab == "config" and kind == "kvm":
+            ctx["has_agent"] = driver.has_agent(machine_id)
     except DriverError as e:
         ctx["tab_error"] = str(e)
 
@@ -353,6 +355,16 @@ def iface_defined_ip(kind: str, machine_id: str, iface: str, ip: str = Form(""))
     db.save_iface_ip(kind, machine_id, iface, ip)
     return back(kind, machine_id, "network",
                 msg="IP configurada guardada." if ip else "IP configurada borrada.")
+
+
+@app.post("/m/{kind}/{machine_id}/agent")
+def enable_agent(kind: str, machine_id: str):
+    driver = driver_or_404(kind)
+    try:
+        notes = driver.enable_agent(machine_id)
+    except DriverError as e:
+        return back(kind, machine_id, "config", error=str(e))
+    return back(kind, machine_id, "config", msg=" ".join(notes))
 
 
 # --- Discos ---------------------------------------------------------------

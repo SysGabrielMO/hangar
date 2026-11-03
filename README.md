@@ -272,6 +272,23 @@ una IP estática configurada **solo dentro** de ella y no tiene agente, DHCP ni
 ARP, el hipervisor no puede conocerla: anótala en Red o instala
 `qemu-guest-agent` para que aparezca sola.
 
+## Agente QEMU
+
+Las VM nuevas se crean ya con el canal `org.qemu.guest_agent.0`. Para una VM
+antigua, abre **Configuración → Agente QEMU** y pulsa **Añadir canal del
+agente**; si está encendida se intenta en caliente y, si no, se aplica al
+reiniciar.
+
+Dentro de la VM hay que instalar y arrancar el agente:
+
+```bash
+sudo apt install qemu-guest-agent
+sudo systemctl enable --now qemu-guest-agent
+```
+
+Con eso Hangar puede leer las IPs estáticas de redes privadas, además de usar
+el agente para cambiar IPs o activar la consola serie.
+
 ## Crear máquinas
 
 Botón **+ Nueva máquina**. La creación corre en segundo plano y abre una
@@ -381,3 +398,4 @@ consolas. GitHub Actions las ejecuta en cada push y pull request
 - [x] Métricas (gráficas de CPU/RAM)
 - [x] Tests automáticos y CI
 - [x] Crear desde imagen qcow2 con cloud-init
+- [x] Canal del agente QEMU en VM nuevas y existentes
