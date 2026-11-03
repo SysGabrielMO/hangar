@@ -48,7 +48,8 @@ def test_sample_cpu_and_memory(monkeypatch):
     monkeypatch.setattr(metrics.time, "monotonic", lambda: next(ticks))
 
     first = metrics.sample("fake", "m1")
-    assert first["cpu_pct"] == 0.0
+    assert first["cpu_pct"] is None
+    assert first["history"][0]["cpu"] is None
     second = metrics.sample("fake", "m1")
     assert second["cpu_pct"] == pytest.approx(100 / (os.cpu_count() or 1), abs=0.2)
     assert second["mem_pct"] == 50.0

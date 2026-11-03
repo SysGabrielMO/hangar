@@ -94,7 +94,7 @@
   <div class="metrics-grid">
     <div class="metric">
       <div class="metric-title"><span>CPU</span>
-        <strong id="metric-cpu">{{ "%.1f" | format(usage.cpu_pct) }} %</strong></div>
+        <strong id="metric-cpu">{% if usage.cpu_pct is none %}Midiendo…{% else %}{{ "%.1f" | format(usage.cpu_pct) }} %{% endif %}</strong></div>
       <canvas class="spark" id="metric-cpu-chart" height="90"></canvas>
       <span class="muted small" id="metric-cpu-note">% del host</span>
     </div>

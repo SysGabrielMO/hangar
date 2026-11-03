@@ -269,7 +269,7 @@ function initMetrics() {
   // no aparece vacía mientras llega el primer fetch.
   try {
     const initial = JSON.parse(document.getElementById("metric-history")?.textContent || "[]");
-    cpuValues.push(...initial.map((point) => point.cpu));
+    cpuValues.push(...initial.map((point) => point.cpu).filter((value) => value !== null));
     memValues.push(...initial.map((point) => (
       memPercent ? (point.mem ?? 0) : point.used / 2 ** 30
     )));
@@ -303,14 +303,16 @@ function initMetrics() {
 
       const history = data.history || [];
       cpuValues.length = 0;
-      cpuValues.push(...history.map((point) => point.cpu));
+      cpuValues.push(...history.map((point) => point.cpu).filter((value) => value !== null));
       memPercent = Boolean(data.mem_limit);
       memValues.length = 0;
       memValues.push(...history.map((point) => (
         memPercent ? (point.mem ?? 0) : point.used / 2 ** 30
       )));
 
-      cpuValue.textContent = `${data.cpu_pct.toFixed(1)} %`;
+      cpuValue.textContent = data.cpu_pct === null
+        ? "Midiendo…"
+        : `${data.cpu_pct.toFixed(1)} %`;
       memValue.textContent = data.mem_limit
         ? `${fmtBytes(data.mem_used)} / ${fmtBytes(data.mem_limit)}`
         : fmtBytes(data.mem_used);

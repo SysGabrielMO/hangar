@@ -220,7 +220,8 @@ Docker), el resto sigue y esa queda marcada como «sin IP» en el registro.
 La pestaña **Rendimiento** de cada máquina encendida muestra su CPU (en % del
 host) y su RAM (usada y límite), con una gráfica de los últimos minutos. Se
 actualiza cada 3 s mientras la pestaña está abierta; el histórico vive en
-memoria y se pierde al reiniciar Hangar.
+memoria y se pierde al reiniciar Hangar. La primera lectura de CPU tarda una
+muestra en estar lista y muestra «Midiendo…»; la RAM aparece desde el principio.
 
 - **KVM**: tiempo de CPU de libvirt y memoria RSS del proceso.
 - **Docker**: `container.stats()` (descontando la caché de página).

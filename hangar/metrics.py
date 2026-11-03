@@ -47,9 +47,10 @@ def sample(kind: str, machine_id: str) -> dict:
                 "mem_used": 0, "mem_limit": usage.mem_limit, "history": [],
             }
         else:
-            cpu_pct = 0.0
+            cpu_pct = None
             previous = _prev.get(key)
             if previous:
+                cpu_pct = 0.0
                 elapsed = now - previous[0]
                 delta = usage.cpu_time - previous[1]
                 if elapsed > 0 and delta > 0:
@@ -60,12 +61,13 @@ def sample(kind: str, machine_id: str) -> dict:
                        if usage.mem_limit else None)
             points = _history[key]
             points.append({
-                "cpu": round(cpu_pct, 1),
+                "cpu": round(cpu_pct, 1) if cpu_pct is not None else None,
                 "mem": round(mem_pct, 1) if mem_pct is not None else None,
                 "used": usage.mem_used,
             })
             data = {
-                "state": usage.state, "cpu_pct": round(cpu_pct, 1),
+                "state": usage.state,
+                "cpu_pct": round(cpu_pct, 1) if cpu_pct is not None else None,
                 "mem_pct": round(mem_pct, 1) if mem_pct is not None else None,
                 "mem_used": usage.mem_used, "mem_limit": usage.mem_limit,
                 "history": list(points),
