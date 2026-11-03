@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Consolas · Hangar</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
+  <link rel="stylesheet" href="/static/consoles.css">
+</head>
+<body class="consoles-body">
+  <header class="consoles-top">
+    <a href="/" class="brand">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <path d="M2 21V10l10-6 10 6v11h-4v-8H6v8z" fill="currentColor"/>
+      </svg>
+      Hangar
+    </a>
+    <span class="consoles-title">Consolas</span>
+    <div class="consoles-actions">
+      <a class="btn small" id="active-detail" href="/" hidden>Ficha</a>
+      <a class="btn small" href="/">← Máquinas</a>
+    </div>
+  </header>
+
+  <div class="console-tabs">
+    <div class="console-tab-list" id="console-tab-list" role="tablist"
+         aria-label="Consolas abiertas"></div>
+    <select id="console-add" aria-label="Añadir una consola">
+      <option value="">Añadir consola…</option>
+    </select>
+  </div>
+
+  <div class="console-panes" id="console-panes">
+    <div class="console-empty" id="console-empty">
+      {% if catalog %}
+      <strong>No hay ninguna consola abierta</strong>
+      <span>Elige una máquina encendida en «Añadir consola».</span>
+      {% else %}
+      <strong>No hay máquinas encendidas</strong>
+      <span>Arranca una desde la portada y vuelve a Consolas.</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <script id="console-catalog" type="application/json">{{ catalog | tojson }}</script>
+  <script src="/static/vendor/xterm/xterm.js"></script>
+  <script src="/static/vendor/xterm/addon-fit.js"></script>
+  <script src="/static/consoles.js"></script>
+</body>
+</html>

@@ -176,7 +176,7 @@ hangar/
   desktop.py           aplicación de escritorio (ventana Qt + servidor interno)
   main.py              rutas de máquinas y API JSON (FastAPI)
   common.py            plantillas, seguridad y utilidades compartidas
-  console.py           consola web (websocket ↔ pseudo-terminal)
+  console.py           consola web (websocket ↔ pseudo-terminal) y /consoles
   networks.py          página de redes
   modules.py           preparar/recoger el laboratorio y exportación
   metrics.py           consumo de CPU/RAM para la pestaña Rendimiento
@@ -188,9 +188,11 @@ hangar/
     lxc.py             lxc-* a través del ayudante
     docker_driver.py   SDK oficial de Docker
   templates/           páginas HTML (Jinja2)
-  static/              style.css y app.js
+  static/              style.css, app.js, consolas.css y consolas.js
+tests/                 suite de pytest (API, drivers, modo clase, métricas)
 scripts/               ayudante LXC, acceso directo del menú y env.sh (prepara .venv)
 hangar-app             abre la aplicación de escritorio
+run-tests.sh           ejecuta la suite de tests
 run.sh                 abre el servidor para usarlo en el navegador
 ```
 
@@ -229,10 +231,15 @@ sin `--memory`), se muestra el consumo en MiB/GiB y «sin límite configurado».
 
 ## Consola
 
-- **Consola** (máquina encendida): terminal con [xterm.js](https://xtermjs.org/)
-  (incluido en `hangar/static/vendor`, funciona sin Internet).
+- **Consolas** (máquinas encendidas): desde la ficha, «Consola» abre un espacio
+  de trabajo con [xterm.js](https://xtermjs.org/) (incluido en
+  `hangar/static/vendor`, funciona sin Internet) y **pestañas**. Puedes añadir
+  varias máquinas con el desplegable «Añadir consola»; la URL guarda las
+  abiertas (`/consoles?m=...`), así que al recargar siguen ahí.
   KVM usa la consola serie (`virsh console`), LXC `lxc-attach` y Docker
   `docker exec -it`.
+- **Consola serie** (KVM): enlace en la ficha para abrir la consola individual
+  con el botón «Activar consola serie».
 - **Pantalla** (VMs con SPICE/VNC): abre `virt-viewer` en tu escritorio.
 
 ## Red
@@ -307,6 +314,19 @@ o lánzala desde una terminal con `./hangar-app` para ver el error.
 - `GET /api/machines/{kind}/{id}`: ficha completa
 - Documentación interactiva en `/docs`
 
+## Tests
+
+```bash
+./run-tests.sh
+```
+
+Instala `pytest`/`httpx` en el entorno la primera vez y ejecuta la suite. Las
+pruebas no arrancan máquinas reales: simulan los drivers y usan `TestClient`
+para la API. Cubren, entre otras cosas, la validación de IPs, las rutas
+seguras, los parsers de LXC, el modo clase, las métricas y la página de
+consolas. GitHub Actions las ejecuta en cada push y pull request
+(`.github/workflows/tests.yml`).
+
 ## Hoja de ruta
 
 - [x] Listar y ver la ficha de KVM, LXC y Docker
@@ -318,7 +338,7 @@ o lánzala desde una terminal con `./hangar-app` para ver el error.
 - [x] Crear máquinas: KVM desde ISO o clonando, LXC desde las imágenes de
       `lxc-download`, Docker con puertos, volúmenes y variables
 - [x] Módulos del grado, con acciones por módulo y exportación a Markdown
-- [x] Consola web (terminal) y pantalla con virt-viewer
+- [x] Consola web (terminal), consolas en pestañas y pantalla con virt-viewer
 - [x] Añadir/quitar interfaces y cambiar IPs; página de redes
 - [x] Panel de capacidad del host, aviso antes de encender un módulo que no
       cabe y acciones de arranque/parada por fila
@@ -328,3 +348,4 @@ o lánzala desde una terminal con `./hangar-app` para ver el error.
 - [x] Snapshots: crear, listar, volver y borrar (KVM internos, con memoria si
       está encendida; LXC con `lxc-snapshot`, contenedor apagado)
 - [x] Métricas (gráficas de CPU/RAM)
+- [x] Tests automáticos y CI

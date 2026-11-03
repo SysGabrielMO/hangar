@@ -19,8 +19,12 @@
   </div>
   <div class="actions">
     {% if m.state == "running" %}
-    <a class="btn" href="{{ base_url }}/console" target="_blank" rel="noopener"
-       title="Terminal en una pestaña nueva">Consola</a>
+    <a class="btn" href="/consoles?m={{ (m.kind ~ '/' ~ m.id) | urlencode }}"
+       title="Abrir la consola, con pestañas para varias máquinas">Consola</a>
+    {% if driver.can_enable_serial %}
+    <a class="muted small" href="{{ base_url }}/console"
+       title="Consola individual con la opción de activar la consola serie">Consola serie</a>
+    {% endif %}
     {% endif %}
     {% if m.display %}
     <form method="post" action="{{ base_url }}/display"

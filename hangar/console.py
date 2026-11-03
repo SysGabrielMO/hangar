@@ -20,11 +20,25 @@ from fastapi.responses import RedirectResponse
 from starlette.websockets import WebSocketDisconnect
 
 from . import jobs
-from .common import (TOKEN_COOKIE, back, driver_or_404, host_allowed, machine_name, templates,
-                     token_ok)
+from .common import (TOKEN_COOKIE, back, driver_or_404, host_allowed, list_all, machine_name,
+                     templates, token_ok)
 from .drivers import DRIVERS, DriverError
 
 router = APIRouter()
+
+
+@router.get("/consoles")
+def consoles_page(request: Request):
+    """Espacio de trabajo con varias consolas en pestañas."""
+    machines, errors = list_all()
+    catalog = [
+        {"kind": m.kind, "id": m.id, "name": m.name, "label": DRIVERS[m.kind].label}
+        for m in sorted(machines, key=lambda m: (m.kind, m.name.lower()))
+        if m.state == "running"
+    ]
+    return templates.TemplateResponse(request, "consoles.html", {
+        "catalog": catalog, "errors": errors,
+    })
 
 
 @router.get("/m/{kind}/{machine_id}/console")
