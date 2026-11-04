@@ -347,6 +347,7 @@ function initConsoleDrawer() {
   const host = document.getElementById("console-drawer-term");
   const status = document.getElementById("console-drawer-status");
   const close = document.getElementById("console-drawer-close");
+  const resizeHandle = document.getElementById("console-drawer-resize");
   if (!toggle || !drawer || !host) return;
   if (typeof Terminal === "undefined" || typeof FitAddon === "undefined") return;
 
@@ -403,12 +404,42 @@ function initConsoleDrawer() {
     sendResize();
   };
 
+  const HEIGHT_KEY = "hangar.console.height";
+  const MIN_HEIGHT = 180;
+
+  const maxHeight = () => Math.max(MIN_HEIGHT, window.innerHeight - 100);
+
+  const saveHeight = () => {
+    try {
+      localStorage.setItem(HEIGHT_KEY, String(Math.round(drawer.getBoundingClientRect().height)));
+    } catch (error) {
+      // sin almacenamiento local
+    }
+  };
+
+  const applyHeight = (value, persist = false) => {
+    const height = Math.round(Math.max(MIN_HEIGHT, Math.min(value, maxHeight())));
+    document.documentElement.style.setProperty("--console-drawer-height", `${height}px`);
+    resizeHandle?.setAttribute("aria-valuenow", String(height));
+    resizeHandle?.setAttribute("aria-valuemax", String(maxHeight()));
+    if (persist) saveHeight();
+    requestAnimationFrame(fitTerminal);
+  };
+
+  let storedHeight = 0;
+  try {
+    storedHeight = parseInt(localStorage.getItem(HEIGHT_KEY) || "0", 10) || 0;
+  } catch (error) {
+    storedHeight = 0;
+  }
+
   const open = () => {
     drawer.hidden = false;
     document.body.classList.add("console-open");
     toggle.setAttribute("aria-expanded", "true");
     toggle.textContent = "Ocultar consola";
     ensureTerminal();
+    applyHeight(storedHeight || drawer.getBoundingClientRect().height);
     requestAnimationFrame(() => {
       fitTerminal();
       term.focus();
@@ -427,7 +458,53 @@ function initConsoleDrawer() {
     else hide();
   });
   close.addEventListener("click", hide);
-  window.addEventListener("resize", fitTerminal);
+
+  if (resizeHandle) {
+    resizeHandle.addEventListener("pointerdown", (event) => {
+      if (drawer.hidden || event.button !== 0) return;
+      event.preventDefault();
+      const startY = event.clientY;
+      const startHeight = drawer.getBoundingClientRect().height;
+      try {
+        resizeHandle.setPointerCapture(event.pointerId);
+      } catch (error) {
+        // sin captura de puntero, se sigue pudiendo arrastrar
+      }
+      document.body.classList.add("console-resizing");
+
+      const move = (moveEvent) => {
+        applyHeight(startHeight + startY - moveEvent.clientY);
+      };
+      const finish = () => {
+        resizeHandle.removeEventListener("pointermove", move);
+        resizeHandle.removeEventListener("pointerup", finish);
+        resizeHandle.removeEventListener("pointercancel", finish);
+        document.body.classList.remove("console-resizing");
+        saveHeight();
+      };
+      resizeHandle.addEventListener("pointermove", move);
+      resizeHandle.addEventListener("pointerup", finish);
+      resizeHandle.addEventListener("pointercancel", finish);
+    });
+
+    resizeHandle.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      const delta = event.key === "ArrowUp" ? 30 : -30;
+      applyHeight(drawer.getBoundingClientRect().height + delta, true);
+    });
+
+    resizeHandle.addEventListener("dblclick", () => {
+      applyHeight(Math.min(window.innerHeight * 0.45, 480), true);
+    });
+  }
+
+  window.addEventListener("resize", () => {
+    if (drawer.hidden) return;
+    applyHeight(drawer.getBoundingClientRect().height);
+    fitTerminal();
+  });
+
   if (new URLSearchParams(location.search).get("console") === "1") open();
 }
 

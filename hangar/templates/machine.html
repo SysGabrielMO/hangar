@@ -420,6 +420,9 @@ sudo systemctl enable --now qemu-guest-agent</pre>
 
 {% if m.state == "running" %}
 <section class="console-drawer" id="console-drawer" hidden aria-label="Consola de {{ m.name }}">
+  <div class="console-drawer-resize" id="console-drawer-resize" role="separator"
+       aria-orientation="horizontal" aria-label="Redimensionar la consola"
+       aria-valuemin="180" tabindex="0" title="Arrastra para cambiar el alto"></div>
   <div class="console-drawer-bar">
     <span class="dot running"></span>
     <strong>{{ m.name }}</strong>

@@ -279,16 +279,29 @@ pre.raw { margin: 0; padding: 14px; background: var(--code-bg); border-radius: 8
 .alert[hidden] { display: none; }
 
 /* Cajón de consola de la ficha */
-body.console-open { padding-bottom: min(48vh, 520px); }
+body.console-open { padding-bottom: calc(var(--console-drawer-height, min(48vh, 520px)) + 8px); }
 .console-drawer {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
-  height: min(45vh, 480px); min-height: 240px;
+  height: var(--console-drawer-height, min(45vh, 480px));
+  min-height: 180px; max-height: calc(100vh - 80px);
   display: flex; flex-direction: column;
   background: #0b0e12; color: #e6e8eb;
   border-top: 1px solid #2a3039;
   box-shadow: 0 -10px 28px rgba(0, 0, 0, .28);
 }
 .console-drawer[hidden] { display: none; }
+.console-drawer-resize {
+  flex: none; height: 9px; position: relative;
+  cursor: ns-resize; touch-action: none; background: #171b21;
+}
+.console-drawer-resize::after {
+  content: ""; position: absolute; left: 50%; top: 3px; transform: translateX(-50%);
+  width: 54px; height: 4px; border-radius: 999px; background: #3a414b;
+}
+.console-drawer-resize:hover::after,
+.console-drawer-resize:focus-visible::after { background: #6b7280; }
+.console-drawer-resize:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+body.console-resizing, body.console-resizing * { cursor: ns-resize !important; user-select: none; }
 .console-drawer-bar {
   display: flex; align-items: center; gap: 10px; flex: none;
   padding: 6px 12px; background: #171b21; border-bottom: 1px solid #2a3039;
@@ -320,8 +333,8 @@ body.console-open { padding-bottom: min(48vh, 520px); }
   .grid, .grid.notes { grid-template-columns: 1fr; }
   .toasts { left: 16px; right: 16px; bottom: 16px; }
   .toast { max-width: none; }
-  .console-drawer { height: 55vh; max-height: 60vh; }
-  body.console-open { padding-bottom: 58vh; }
+  .console-drawer { height: var(--console-drawer-height, 55vh); max-height: calc(100vh - 60px); }
+  body.console-open { padding-bottom: calc(var(--console-drawer-height, 55vh) + 8px); }
   .console-drawer-bar { gap: 6px; padding: 6px 8px; }
   .console-drawer-bar a { margin-left: 0; }
   .network-row { flex-wrap: wrap; }
