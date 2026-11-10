@@ -1,31 +1,44 @@
 {% extends "base.html" %}
 {% from "_fields.html" import render_fields %}
 {% block title %}Nueva máquina · Hangar{% endblock %}
+{% set kind_help = {
+  "kvm": "Máquina virtual completa: desde una ISO, una imagen cloud o clonando otra.",
+  "lxc": "Contenedor de sistema: un Linux entero, ligero y rápido de crear.",
+  "docker": "Contenedor de aplicación a partir de una imagen de Docker.",
+} %}
 {% block content %}
 
-<a href="/" class="back">← Todas las máquinas</a>
-<h1 class="page-title">Nueva máquina</h1>
+<nav class="crumbs" aria-label="Estás en"><a href="/">Máquinas</a>{{ icon("chevron-right") }}<span>Nueva</span></nav>
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Nueva máquina</h1>
+    <p class="page-sub">Elige el tipo y rellena lo imprescindible; lo demás se puede cambiar después.</p>
+  </div>
+</div>
 
-<nav class="tabs">
+<nav class="kind-tabs" aria-label="Tipo de máquina">
   {% for k, d in drivers.items() %}
-  <a href="/new/{{ k }}" class="{% if kind == k %}active{% endif %}">{{ d.label }}</a>
+  <a href="/new/{{ k }}{{ ('?module=' ~ (module | urlencode)) if module }}" class="kind-tab {{ 'active' if kind == k }}">
+    <strong><span class="badge {{ k }}">{{ d.label }}</span></strong>
+    <span>{{ kind_help.get(k, "") }}</span>
+  </a>
   {% endfor %}
 </nav>
 
-{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ icon("alert") }}<span>{{ error }}</span></div>{% endif %}
 
 {% if fields %}
-<form class="card edit-form" method="post" action="/new/{{ kind }}" id="new-machine-form">
+<form class="card edit-form" method="post" action="/new/{{ kind }}" id="new-machine-form" data-kind="{{ kind }}">
   {{ render_fields(fields) }}
   {% if kind == "kvm" %}
-  <div class="field network-editor">
+  <div class="field network-editor" data-field="networks">
     <label>Redes</label>
     <div id="network-rows" class="network-rows"></div>
     <div class="network-actions">
-      <button class="btn small" type="button" id="add-network">+ Añadir red</button>
-      <button class="btn small" type="button" id="new-network">+ Crear red nueva</button>
+      <button class="btn small" type="button" id="add-network">{{ icon("plus") }} Añadir red</button>
+      <button class="btn small ghost" type="button" id="new-network">Crear una red nueva…</button>
     </div>
-    <small class="muted">La primera red es la principal. Puedes dejar la lista vacía.</small>
+    <small class="muted">La primera es la principal. Si quitas todas, la máquina se crea sin red.</small>
     <input type="hidden" name="networks" id="networks-json">
   </div>
   {% endif %}
@@ -33,7 +46,7 @@
     <label for="f-module">Módulo</label>
     <select id="f-module" name="module">
       <option value="">— Sin módulo —</option>
-      {% for k, label in modules.items() %}<option value="{{ k }}" {% if module == k %}selected{% endif %}>{{ k }} · {{ label }}</option>{% endfor %}
+      {% for k, label in modules.items() %}<option value="{{ k }}" {{ "selected" if module == k }}>{{ k }} · {{ label }}</option>{% endfor %}
     </select>
   </div>
   <div class="field">
@@ -41,13 +54,14 @@
     <input id="f-description" name="description" value="{{ description }}" placeholder="Para qué sirve esta máquina">
   </div>
   <div class="form-foot">
-    <button class="btn primary">Crear {{ drivers[kind].label }}</button>
+    <button class="btn primary">{{ icon("plus") }} Crear {{ drivers[kind].label }}</button>
+    <a class="btn ghost" href="/">Cancelar</a>
   </div>
 </form>
 
 {% if kind == "kvm" %}
 <section class="card edit-form network-create" id="network-create" hidden>
-  <h2>Crear red de libvirt</h2>
+  <h2>{{ icon("network") }}Crear red de libvirt</h2>
   <div class="field-row">
     <div class="field">
       <label for="net-name">Nombre</label>
@@ -70,7 +84,7 @@
   <label class="checkbox"><input type="checkbox" id="net-autostart"> Arrancar con el host</label>
   <div class="form-foot">
     <button class="btn primary" type="button" id="net-create-submit">Crear red</button>
-    <button class="btn" type="button" id="net-create-cancel">Cancelar</button>
+    <button class="btn ghost" type="button" id="net-create-cancel">Cancelar</button>
   </div>
   <div class="alert error" id="net-create-error" hidden></div>
 </section>
@@ -78,7 +92,10 @@
 <script type="application/json" id="network-options">{{ network_options | tojson }}</script>
 <script type="application/json" id="network-default">{{ default_network | tojson }}</script>
 <script type="application/json" id="network-initial">{{ initial_networks | tojson }}</script>
-<script src="/static/new-networks.js"></script>
 {% endif %}
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if fields and kind == "kvm" %}<script src="{{ static('new-networks.js') }}"></script>{% endif %}
 {% endblock %}

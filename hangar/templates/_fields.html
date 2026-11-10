@@ -1,7 +1,7 @@
 {# Pinta una lista de drivers.base.Field como campos de formulario #}
 {% macro render_fields(fields) %}
 {% for f in fields %}
-<div class="field {{ f.type }}">
+<div class="field {{ f.type }}" data-field="{{ f.key }}">
   {% if f.type == "checkbox" %}
   <label><input type="checkbox" name="{{ f.key }}" value="1" {% if f.value %}checked{% endif %}> {{ f.label }}</label>
   {% else %}

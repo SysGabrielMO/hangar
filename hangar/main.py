@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
@@ -13,9 +13,9 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import console, db, jobs, metrics, modules, networks
-from .common import (ACCESS_TOKEN, BASE, TOKEN_COOKIE, back, driver_or_404, host_allowed,
-                     host_stats, list_all, machine_name, safe_next, same_origin, templates,
-                     token_ok)
+from .common import (ACCESS_TOKEN, BASE, NO_MODULE, SETTINGS_SECTIONS, TOKEN_COOKIE, back,
+                     driver_or_404, host_allowed, host_stats, list_all, machine_name, safe_next,
+                     same_origin, templates, token_ok)
 from .drivers import DRIVERS, DriverError
 from .drivers.base import SNAPSHOT_NAME_RE
 
@@ -44,7 +44,10 @@ async def local_only(request: Request, call_next):
         given = request.query_params.get("token")
         if given is not None and token_ok(given):
             # La ventana entra con ?token=…: se guarda en una cookie y se quita de la URL
-            response = RedirectResponse(request.url.path, status_code=303)
+            rest = urlencode([(k, v) for k, v in request.query_params.multi_items()
+                              if k != "token"])
+            response = RedirectResponse(request.url.path + (f"?{rest}" if rest else ""),
+                                        status_code=303)
             response.set_cookie(TOKEN_COOKIE, ACCESS_TOKEN, httponly=True, samesite="strict")
             return response
         if not token_ok(request.cookies.get(TOKEN_COOKIE)):
@@ -70,12 +73,11 @@ async def html_errors(request: Request, exc: StarletteHTTPException):
 POWER_MESSAGES = {"start": "Arrancando…", "stop": "Apagando…",
                   "kill": "Apagado forzado.", "restart": "Reiniciando…"}
 
-TABS = {"info": "Características", "metrics": "Rendimiento", "network": "Red", "edit": "Modificar",
-        "disks": "Discos", "snapshots": "Snapshots", "users": "Usuarios",
-        "notes": "Descripción y notas", "config": "Configuración", "delete": "Borrar"}
-
-NO_MODULE = "_none"
-
+# Pestañas de la ficha: clave → (título, icono)
+TABS = {"info": ("Resumen", "list"), "metrics": ("Rendimiento", "activity"),
+        "network": ("Red", "network"), "disks": ("Discos", "disk"),
+        "snapshots": ("Snapshots", "camera"), "users": ("Usuarios", "users"),
+        "notes": ("Notas", "note"), "settings": ("Ajustes", "settings")}
 
 @app.get("/")
 def index(request: Request, kind: str = "", state: str = "", q: str = "", module: str = "",
@@ -87,7 +89,10 @@ def index(request: Request, kind: str = "", state: str = "", q: str = "", module
     needle = q.lower().strip()
 
     def meta_of(m):
-        return meta.get((m.kind, m.id), db.Meta())
+        md = meta.get((m.kind, m.id), db.Meta())
+        if md.module and md.module not in db.MODULES:   # módulo retirado de MODULES
+            md = replace(md, module="")
+        return md
 
     def matches(m):
         md = meta_of(m)
@@ -130,8 +135,8 @@ def index(request: Request, kind: str = "", state: str = "", q: str = "", module
         "groups": [(key, items) for key, items in groups.items() if items],
         "total_rows": len(rows), "errors": errors, "counts": counts, "total": len(machines),
         "running": running, "kind": kind, "state": state, "q": q, "module": module,
-        "module_counts": module_counts, "no_module": NO_MODULE,
-        "jobs": list(jobs.JOBS.values())[-5:][::-1], "msg": msg, "error": error,
+        "module_counts": module_counts,
+        "jobs": jobs.recent(), "msg": msg, "error": error,
         "host": host, "alloc_mem": alloc_mem, "alloc_vcpus": alloc_vcpus,
         "alloc_pct": alloc_pct, "mem_over": bool(host["mem_total"] and alloc_mem > host["mem_total"]),
         "module_res": module_res,
@@ -217,26 +222,29 @@ def job_page(request: Request, job_id: str):
 
 @app.get("/m/{kind}/{machine_id}")
 def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
-           msg: str = "", error: str = ""):
+           sec: str = "", msg: str = "", error: str = ""):
     driver = driver_or_404(kind)
     try:
         machine = driver.get(machine_id)
     except DriverError as e:
         raise HTTPException(404, str(e)) from e
 
+    if tab in SETTINGS_SECTIONS:          # enlaces antiguos: ?tab=edit, config o delete
+        tab, sec = "settings", tab
+    visible_tabs = (TABS if kind == "kvm"
+                    else {key: value for key, value in TABS.items() if key != "disks"})
+    if tab not in visible_tabs:
+        tab = "info"
+
     ctx = {"users": [], "fields": [], "plan": None, "snaps": [], "ifaces": [],
            "iface_fields": [], "disks": [], "disk_fields": [], "tab_error": None,
-           "usage": None, "has_agent": False}
+           "usage": None, "has_agent": False, "edit_error": None, "plan_error": None}
     try:
         if tab == "snapshots" and not driver.no_snapshots_reason:
             ctx["snaps"] = driver.snapshots(machine_id)
         elif tab == "users":
             ctx["users"] = sorted(driver.users(machine_id),
                                   key=lambda u: (not u.can_login, u.uid))
-        elif tab == "edit":
-            ctx["fields"] = driver.editable(machine_id)
-        elif tab == "delete":
-            ctx["plan"] = driver.delete_plan(machine_id)
         elif tab == "network":
             ctx["ifaces"] = driver.interfaces(machine_id)
             saved_ips = db.get_iface_ips(kind, machine_id)
@@ -246,21 +254,30 @@ def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
         elif tab == "metrics" and machine.state == "running":
             ctx["usage"] = metrics.sample(kind, machine_id)
         elif tab == "disks":
-            if driver.kind != "kvm":
-                ctx["tab_error"] = "Añadir discos solo está disponible para máquinas KVM."
-            else:
-                ctx["disks"] = driver.disks(machine_id)
-                ctx["disk_fields"] = driver.disk_fields(machine_id)
-        elif tab == "config" and kind == "kvm":
-            ctx["has_agent"] = driver.has_agent(machine_id)
+            ctx["disks"] = driver.disks(machine_id)
+            ctx["disk_fields"] = driver.disk_fields(machine_id)
     except DriverError as e:
         ctx["tab_error"] = str(e)
 
-    visible_tabs = (TABS if kind == "kvm"
-                    else {key: label for key, label in TABS.items() if key != "disks"})
+    if tab == "settings":
+        # Cada sección falla por separado: un error al leer una no esconde las otras
+        try:
+            ctx["fields"] = driver.editable(machine_id)
+        except DriverError as e:
+            ctx["edit_error"] = str(e)
+        try:
+            ctx["plan"] = driver.delete_plan(machine_id)
+        except DriverError as e:
+            ctx["plan_error"] = str(e)
+        if kind == "kvm":
+            try:
+                ctx["has_agent"] = driver.has_agent(machine_id)
+            except DriverError:
+                pass
+
     return templates.TemplateResponse(request, "machine.html", ctx | {
         "m": machine, "meta": db.get_meta(kind, machine_id), "driver": driver,
-        "tab": tab if tab in visible_tabs else "info", "tabs": visible_tabs,
+        "tab": tab, "tabs": visible_tabs, "sec": sec,
         "default_snapshot_name": f"snap-{datetime.now():%Y%m%d-%H%M}",
         "msg": msg, "error": error,
     })
@@ -434,6 +451,7 @@ async def delete(request: Request, kind: str, machine_id: str):
         return back(kind, machine_id, "delete", error=str(e))
     db.delete_meta(kind, machine_id)
     db.delete_iface_ips(kind, machine_id)
+    metrics.forget(kind, machine_id)
     return RedirectResponse(f"/?msg={quote(' '.join(notes))}", status_code=303)
 
 
@@ -470,6 +488,23 @@ def api_status():
         "host": host_stats(),
         "errors": errors,
     }
+
+
+@app.get("/api/host")
+def api_host():
+    """Memoria, carga y disco del host: lo refresca la barra lateral."""
+    return host_stats()
+
+
+@app.get("/api/jobs/{job_id}")
+def api_job(job_id: str):
+    """Estado y registro de una tarea, para verla avanzar sin recargar la página."""
+    job = jobs.JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Esa tarea no existe (¿se reinició Hangar?)")
+    return {"status": job.status, "lines": job.lines, "error": job.error,
+            "url": job.link or (f"/m/{job.kind}/{quote(job.result_id)}?tab={job.tab}"
+                                if job.status == "done" else "")}
 
 
 @app.get("/api/metrics/{kind}/{machine_id}")

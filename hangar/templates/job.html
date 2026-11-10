@@ -1,32 +1,33 @@
 {% extends "base.html" %}
 {% block title %}{{ job.title }} · Hangar{% endblock %}
-{% block head %}{% if job.status == "running" %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block head %}
+{# Sin JavaScript la página se sigue recargando sola #}
+{% if job.status == "running" %}<noscript><meta http-equiv="refresh" content="2"></noscript>{% endif %}
+{% endblock %}
 {% block content %}
+{% set done_url = job.link or ("/m/" ~ job.kind ~ "/" ~ (job.result_id | urlencode) ~ "?tab=" ~ job.tab) %}
 
-<a href="/" class="back">← Todas las máquinas</a>
-<h1 class="page-title">{{ job.title }}</h1>
-
-{% if job.status == "running" %}
-<div class="alert info"><span class="spinner"></span> En curso desde las {{ job.started }}… esta página se actualiza sola.</div>
-{% elif job.status == "done" %}
-<div class="alert ok">
-  Terminado.
-  {% if job.link %}
-  <a class="btn primary small" href="{{ job.link }}">Volver →</a>
-  {% else %}
-  <a class="btn primary small" href="/m/{{ job.kind }}/{{ job.result_id | urlencode }}?tab={{ job.tab }}">Ver la máquina →</a>
-  {% endif %}
+<nav class="crumbs" aria-label="Estás en"><a href="/">Máquinas</a>{{ icon("chevron-right") }}<span>Tarea</span></nav>
+<div class="page-head">
+  <h1 class="page-title">{{ job.title }}</h1>
 </div>
-{% else %}
-<div class="alert error">{{ job.error }}</div>
-{% endif %}
 
-<section class="card">
-  <h2>Registro</h2>
-  <pre class="raw log" id="log">{{ job.lines | join("\n") or "…" }}</pre>
-</section>
-<script>
-  const log = document.getElementById("log");
-  log.scrollTop = log.scrollHeight;
-</script>
+<div id="job" data-job-url="/api/jobs/{{ job.id }}" data-status="{{ job.status }}">
+  <div class="alert info" id="job-running" {{ "hidden" if job.status != "running" }}>
+    <span class="spinner"></span>
+    <span>En curso desde las {{ job.started }}. Puedes salir de esta página: la tarea sigue en segundo plano.</span>
+  </div>
+  <div class="alert ok" id="job-done" {{ "hidden" if job.status != "done" }}>
+    {{ icon("check") }}<span>Terminado.</span>
+    <a class="btn primary small" id="job-link" href="{{ done_url if job.status == 'done' else '/' }}">{{ "Volver" if job.link else "Ver la máquina" }} →</a>
+  </div>
+  <div class="alert error" id="job-error" {{ "hidden" if job.status != "error" }}>
+    {{ icon("alert") }}<span id="job-error-text">{{ job.error }}</span>
+  </div>
+
+  <section class="card">
+    <h2>{{ icon("list") }}Registro</h2>
+    <pre class="raw log" id="log">{{ job.lines | join("\n") or "…" }}</pre>
+  </section>
+</div>
 {% endblock %}

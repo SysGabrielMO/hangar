@@ -136,12 +136,21 @@ class DockerDriver(Driver):
             if state != "running":
                 return Usage(state=state)
             try:
-                stats = c.stats(stream=False)
+                try:
+                    # one_shot: una sola lectura; sin él Docker espera 1 s a una segunda muestra
+                    stats = c.stats(stream=False, one_shot=True)
+                except (TypeError, docker.errors.InvalidVersion):
+                    stats = c.stats(stream=False)      # SDK o demonio antiguos
             except DockerException as e:
                 raise DriverError(f"No se pudo leer el consumo: {e}") from e
             cpu_ns = ((stats.get("cpu_stats") or {}).get("cpu_usage") or {}).get("total_usage", 0)
             memory = stats.get("memory_stats") or {}
-            used = int(memory.get("usage", 0)) - int((memory.get("stats") or {}).get("cache", 0))
+            detail = memory.get("stats") or {}
+            # Como «docker stats»: sin la caché de ficheros, que el kernel libera si hace
+            # falta. Se llama inactive_file en cgroup v2 y total_inactive_file/cache en v1.
+            cache = next((detail[k] for k in ("inactive_file", "total_inactive_file", "cache")
+                          if detail.get(k) is not None), 0)
+            used = int(memory.get("usage", 0)) - int(cache)
             limit = int((c.attrs.get("HostConfig") or {}).get("Memory") or 0)
             return Usage(state=state, cpu_time=int(cpu_ns) / 1e9,
                          mem_used=max(used, 0), mem_limit=limit)

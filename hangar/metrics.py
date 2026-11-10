@@ -75,3 +75,12 @@ def sample(kind: str, machine_id: str) -> dict:
 
         _cache[key] = (now, data)
         return data
+
+
+def forget(kind: str, machine_id: str) -> None:
+    """Olvida lo guardado de una máquina (al borrarla)."""
+    key = (kind, machine_id)
+    with _lock:
+        _prev.pop(key, None)
+        _history.pop(key, None)
+        _cache.pop(key, None)

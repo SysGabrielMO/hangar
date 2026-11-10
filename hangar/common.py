@@ -24,7 +24,31 @@ ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 templates = Jinja2Templates(directory=BASE / "templates")
 templates.env.globals["drivers"] = DRIVERS
 templates.env.globals["modules"] = db.MODULES
+# Posición de cada módulo (1…n): decide su color en la interfaz
+templates.env.globals["module_index"] = {key: i for i, key in enumerate(db.MODULES, 1)}
 templates.env.filters["human"] = human_bytes
+NO_MODULE = "_none"              # valor de ?module= para «Sin módulo»
+templates.env.globals["no_module"] = NO_MODULE
+
+
+def static_url(path: str) -> str:
+    """URL de un fichero estático con su fecha de modificación como versión:
+    tras actualizar Hangar, el navegador no sigue usando el CSS o JS antiguo."""
+    try:
+        version = int((BASE / "static" / path).stat().st_mtime)
+    except OSError:
+        version = 0
+    return f"/static/{path}?v={version}"
+
+
+def icon(name: str, cls: str = "") -> Markup:
+    """Icono del sprite static/icons.svg."""
+    return Markup(f'<svg class="icon{" " + cls if cls else ""}" aria-hidden="true">'
+                  f'<use href="{static_url("icons.svg")}#{name}"/></svg>')
+
+
+templates.env.globals["static"] = static_url
+templates.env.globals["icon"] = icon
 
 
 def host_stats() -> dict[str, float | int | str]:
@@ -78,6 +102,7 @@ def _render_markdown(text: str) -> Markup:
 
 
 templates.env.filters["markdown"] = _render_markdown
+templates.env.globals["host_stats"] = host_stats   # la barra lateral lo enseña en todas las páginas
 
 
 # Clave de acceso: la pone el lanzador de escritorio (./hangar-app) para que solo
@@ -134,13 +159,21 @@ def list_all():
     return machines, errors
 
 
+# Modificar, Configuración y Borrar son secciones de la pestaña «Ajustes»
+SETTINGS_SECTIONS = ("edit", "config", "delete")
+
+
 def back(kind: str, machine_id: str, tab: str = "info", msg: str = "", error: str = ""):
+    anchor = ""
+    if tab in SETTINGS_SECTIONS:
+        # sec= dice en qué sección enseñar el mensaje; el ancla lleva hasta ella
+        tab, anchor = f"settings&sec={tab}", f"#{tab}"
     url = f"/m/{kind}/{quote(machine_id)}?tab={tab}"
     if msg:
         url += f"&msg={quote(msg)}"
     if error:
         url += f"&error={quote(error)}"
-    return RedirectResponse(url, status_code=303)
+    return RedirectResponse(url + anchor, status_code=303)
 
 
 def safe_next(url: str, default: str = "/") -> str:

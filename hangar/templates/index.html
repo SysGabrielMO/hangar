@@ -1,172 +1,175 @@
 {% extends "base.html" %}
+{# URL de la portada con los filtros actuales, cambiando solo los que se pasen #}
 {% macro url(kind=kind, state=state, q=q, module=module) -%}
-/?kind={{ kind | urlencode }}&state={{ state | urlencode }}&module={{ module | urlencode }}&q={{ q | urlencode }}
+{%- set parts = [] -%}
+{%- for key, value in [("kind", kind), ("state", state), ("module", module), ("q", q)] if value -%}
+  {%- set _ = parts.append(key ~ "=" ~ (value | urlencode)) -%}
+{%- endfor -%}
+/{{ ("?" ~ parts | join("&")) if parts }}
 {%- endmacro %}
-{% macro power_button(m) -%}
+{# Acciones rápidas de una fila; app.js pinta lo mismo al refrescar (powerButtons) #}
+{% macro power_buttons(m) -%}
 {% set running = m.state == "running" %}
-<button class="btn small power" data-power="{{ 'stop' if running else 'start' }}"
+{% set label = "Apagar" if running else ("Reanudar" if m.state == "paused" else "Arrancar") %}
+{% if running -%}
+<a class="btn small icon-only ghost" href="/m/{{ m.kind }}/{{ m.id | urlencode }}?console=1"
+   title="Abrir consola" aria-label="Consola de {{ m.name }}">{{ icon("terminal") }}</a>
+{%- endif %}
+<button class="btn small icon-only power" type="button" data-power="{{ 'stop' if running else 'start' }}"
         data-kind="{{ m.kind }}" data-id="{{ m.id }}" data-name="{{ m.name }}"
-        title="{{ 'Parar' if running else ('Reanudar' if m.state == 'paused' else 'Arrancar') }}"
-        aria-label="{{ 'Parar' if running else ('Reanudar' if m.state == 'paused' else 'Arrancar') }} {{ m.name }}">
-  {{- "■" if running else "▶" -}}
-</button>
+        title="{{ label }}" aria-label="{{ label }} {{ m.name }}">{{ icon("stop" if running else "play") }}</button>
 {%- endmacro %}
+{% set state_es = {"running": "Encendida", "stopped": "Apagada", "paused": "Pausada"} %}
 {% block content %}
 
-<section class="stats">
-  <div class="stat"><span class="stat-n" data-stat="total">{{ total }}</span><span class="muted">máquinas</span></div>
-  <div class="stat"><span class="stat-n running-n" data-stat="running">{{ running }}</span><span class="muted">encendidas</span></div>
-  {% for k, d in drivers.items() %}
-  <div class="stat"><span class="stat-n" data-stat="kind-{{ k }}">{{ counts[k] }}</span><span class="badge {{ k }}">{{ d.label }}</span></div>
-  {% endfor %}
-</section>
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Máquinas</h1>
+    <p class="page-sub"><strong data-stat="total">{{ total }}</strong> en total ·
+      <strong class="on" data-stat="running">{{ running }}</strong> encendidas</p>
+  </div>
+  <form class="search" method="get" action="/" role="search">
+    {{ icon("search") }}
+    {% if kind %}<input type="hidden" name="kind" value="{{ kind }}">{% endif %}
+    {% if state %}<input type="hidden" name="state" value="{{ state }}">{% endif %}
+    {% if module %}<input type="hidden" name="module" value="{{ module }}">{% endif %}
+    <input type="search" name="q" value="{{ q }}" aria-label="Buscar máquinas"
+           placeholder="Buscar por nombre, IP, descripción o etiqueta">
+  </form>
+</div>
 
-<section class="host-strip" aria-label="Estado del host">
-  <div class="host-item">
-    <span class="host-label">RAM del host</span>
-    <span class="host-value"><strong id="host-ram-text">{{ host.mem_used | human }}</strong>
-      <span class="muted">/ {{ host.mem_total | human }}</span></span>
-    <div class="meter"><span id="host-ram-bar" class="{{ 'hot' if host.mem_pct >= 90 }}"
-                             style="width: {{ host.mem_pct }}%"></span></div>
-    <span class="host-note" id="host-ram-note">{{ host.mem_pct }} % en uso · {{ host.mem_available | human }} disponible</span>
-  </div>
-  <div class="host-item">
-    <span class="host-label">Carga de CPU</span>
-    <span class="host-value"><strong id="host-load-text">{{ "%.1f" | format(host.load) }}</strong>
-      <span class="muted">/ {{ host.cpus }} CPU</span></span>
-    <div class="meter"><span id="host-load-bar" class="{{ 'hot' if host.load_pct >= 90 }}"
-                             style="width: {{ host.load_pct }}%"></span></div>
-    <span class="host-note">media del último minuto</span>
-  </div>
-  <div class="host-item" title="Sistema de archivos de /var/lib (imágenes de VM, LXC y Docker)">
-    <span class="host-label">Disco</span>
-    <span class="host-value"><strong id="host-disk-text">{{ host.disk_used | human }}</strong>
-      <span class="muted">/ {{ host.disk_total | human }}</span></span>
-    <div class="meter"><span id="host-disk-bar" class="{{ 'hot' if host.disk_pct >= 90 }}"
-                             style="width: {{ host.disk_pct }}%"></span></div>
-    <span class="host-note" id="host-disk-note">{{ host.disk_pct }} % de {{ host.disk_path }}</span>
-  </div>
-  <div class="host-item {{ 'over' if mem_over else ('warn' if alloc_pct >= 85) }}"
-       title="Solo cuenta la RAM con límite configurado; los contenedores sin límite no se suman.">
-    <span class="host-label">RAM configurada</span>
-    <span class="host-value"><strong>{{ alloc_mem | human }}</strong>
-      <span class="muted">/ {{ host.mem_total | human }}</span></span>
+<div class="toolbar">
+  <nav class="seg" aria-label="Tipo de máquina">
+    <a href="{{ url(kind='') }}" class="{{ 'active' if not kind }}">Todas <span class="n" data-stat="total">{{ total }}</span></a>
+    {% for k, d in drivers.items() %}
+    <a href="{{ url(kind=k) }}" class="{{ 'active' if kind == k }}">{{ d.label }} <span class="n" data-stat="kind-{{ k }}">{{ counts[k] }}</span></a>
+    {% endfor %}
+  </nav>
+  <nav class="seg" aria-label="Estado">
+    <a href="{{ url(state='') }}" class="{{ 'active' if not state }}">Cualquier estado</a>
+    <a href="{{ url(state='running') }}" class="{{ 'active' if state == 'running' }}">Encendidas</a>
+    <a href="{{ url(state='stopped') }}" class="{{ 'active' if state == 'stopped' }}">Apagadas</a>
+    {% if state == "paused" %}<a href="{{ url(state='paused') }}" class="active">Pausadas</a>{% endif %}
+  </nav>
+  {% if module %}
+  <span class="filter-chip mod-{{ module_index.get(module, 0) }}">
+    <span class="mod-dot"></span>{{ module if module in modules else "Sin módulo" }}
+    <a href="{{ url(module='') }}" title="Quitar el filtro de módulo" aria-label="Quitar el filtro de módulo">{{ icon("x") }}</a>
+  </span>
+  {% endif %}
+  {% if q %}
+  <span class="filter-chip">«{{ q }}»
+    <a href="{{ url(q='') }}" title="Quitar la búsqueda" aria-label="Quitar la búsqueda">{{ icon("x") }}</a>
+  </span>
+  {% endif %}
+  {% if host.mem_total %}
+  <div class="capacity {{ 'over' if mem_over }}"
+       title="Suma de la RAM configurada en todas las máquinas frente a la del host. Los contenedores sin límite no cuentan.">
+    <span>RAM configurada <strong>{{ alloc_mem | human }}</strong> de {{ host.mem_total | human }}</span>
     <div class="meter"><span class="{{ 'over' if mem_over else ('hot' if alloc_pct >= 85) }}"
                              style="width: {{ [alloc_pct, 100] | min }}%"></span></div>
-    <span class="host-note">{{ alloc_pct }} % · {{ "%g" | format(alloc_vcpus) }} vCPU configuradas</span>
+    <span>{{ "%g" | format(alloc_vcpus) }} vCPU</span>
   </div>
-</section>
-
-{% if mem_over %}
-<div class="alert warn">
-  <strong>Ojo con la memoria:</strong> entre todas las máquinas configuran {{ alloc_mem | human }} de RAM
-  ({{ alloc_pct }} % del host) y {{ "%g" | format(alloc_vcpus) }} vCPU. Puedes encenderlas por módulos, pero
-  «Preparar clase» en uno grande puede ahogar el equipo. Hangar te avisa antes de lanzarlo.
+  {% endif %}
 </div>
-{% endif %}
 
-{% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
-{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if msg %}<div class="alert ok">{{ icon("check") }}<span>{{ msg }}</span></div>{% endif %}
+{% if error %}<div class="alert error">{{ icon("alert") }}<span>{{ error }}</span></div>{% endif %}
 
 {% for job in jobs %}
 <div class="alert {{ {'running': 'info', 'done': 'ok', 'error': 'error'}[job.status] }}">
-  {% if job.status == "running" %}<span class="spinner"></span>{% endif %}
-  <a href="/jobs/{{ job.id }}">{{ job.title }}</a> ·
-  {{ {"running": "en curso", "done": "terminada", "error": "falló"}[job.status] }}
+  {% if job.status == "running" %}<span class="spinner"></span>{% else %}{{ icon("check" if job.status == "done" else "alert") }}{% endif %}
+  <span><a href="/jobs/{{ job.id }}">{{ job.title }}</a> ·
+    {{ {"running": "en curso", "done": "terminada", "error": "falló"}[job.status] }}</span>
 </div>
 {% endfor %}
 
 {% for k, err in errors.items() %}
-<div class="alert error"><strong>{{ drivers[k].label }}:</strong> {{ err }}</div>
+<div class="alert error">{{ icon("alert") }}<span><strong>{{ drivers[k].label }}:</strong> {{ err }}</span></div>
 {% endfor %}
 
-<nav class="chips modules-nav" aria-label="Módulos">
-  <a href="{{ url(module='') }}" class="chip {% if not module %}active{% endif %}">Todos los módulos</a>
-  {% for key in modules %}
-  <a href="{{ url(module=key) }}" class="chip {% if module == key %}active{% endif %}" title="{{ modules[key] }}">
-    {{ key }} <span class="chip-n">{{ module_counts[key] }}</span>
-  </a>
-  {% endfor %}
-  <a href="{{ url(module=no_module) }}" class="chip {% if module == no_module %}active{% endif %}">
-    Sin módulo <span class="chip-n">{{ module_counts[""] }}</span>
-  </a>
-</nav>
-
-<form class="filters" method="get" action="/">
-  <div class="chips">
-    <a href="{{ url(kind='') }}" class="chip {% if not kind %}active{% endif %}">Todas</a>
-    {% for k, d in drivers.items() %}
-    <a href="{{ url(kind=k) }}" class="chip {% if kind == k %}active{% endif %}">{{ d.label }}</a>
-    {% endfor %}
-  </div>
-  <input type="hidden" name="kind" value="{{ kind }}">
-  <input type="hidden" name="module" value="{{ module }}">
-  <select name="state" onchange="this.form.submit()">
-    <option value="">Cualquier estado</option>
-    <option value="running" {% if state == 'running' %}selected{% endif %}>Encendidas</option>
-    <option value="stopped" {% if state == 'stopped' %}selected{% endif %}>Apagadas</option>
-    <option value="paused" {% if state == 'paused' %}selected{% endif %}>Pausadas</option>
-  </select>
-  <input type="search" name="q" value="{{ q }}" placeholder="Buscar por nombre, IP, descripción o etiqueta">
-</form>
+{% if mem_over %}
+<div class="alert warn">
+  {{ icon("alert") }}
+  <span><strong>Las máquinas piden más RAM de la que tiene el equipo</strong>
+    ({{ alloc_mem | human }}, el {{ alloc_pct }} %). No pasa nada mientras no las enciendas todas a la vez:
+    Hangar avisa antes de preparar un módulo que no quepa.</span>
+</div>
+{% endif %}
 
 {% for key, items in groups %}
-<section class="module-group">
-  <header class="module-head">
-    <div>
-      <h2>{{ key or "Sin módulo" }} <span class="muted">· {{ module_res[key].count }}</span></h2>
-      {% if key %}<span class="muted small">{{ modules[key] }}{% if items | length != module_res[key].count %} · {{ items | length }} {{ "visible" if items | length == 1 else "visibles" }}{% endif %}</span>{% endif %}
-      <div class="module-cap muted small">
-        {{ module_res[key].mem | human }} RAM · {{ "%g" | format(module_res[key].vcpus) }} vCPU
-        {% if not module_res[key].fits %}
-        <span class="cap-warn" title="La RAM de las máquinas apagadas no cabe en la que queda libre">⚠ no cabe ahora</span>
-        {% endif %}
-      </div>
-    </div>
+{% set res = module_res[key] %}
+<section class="group mod-{{ module_index.get(key, 0) }}" data-group="{{ key or no_module }}">
+  <header class="group-head">
+    <button class="group-toggle" type="button" aria-expanded="true" title="Plegar o desplegar">
+      {{ icon("chevron-down", "chev") }}<span class="mod-dot"></span>
+      <h2>{{ key or "Sin módulo" }}</h2><span class="n">{{ res.count }}</span>
+    </button>
+    <span class="group-info">
+      {% if key %}{{ modules[key] }} · {% endif -%}
+      {% if res.mem or res.vcpus %}{{ res.mem | human }} RAM · {{ "%g" | format(res.vcpus) }} vCPU{% else %}sin límites de recursos{% endif %}
+      {%- if items | length != res.count %} · {{ items | length }} {{ "visible" if items | length == 1 else "visibles" }}{% endif %}
+      {% if not res.fits %}
+      <span class="cap-warn" title="Las máquinas apagadas necesitan {{ res.need | human }} y quedan {{ host.mem_available | human }} libres">· {{ icon("alert") }} no cabe ahora</span>
+      {% endif %}
+    </span>
     {% if key %}
-    <div class="actions">
+    <div class="group-actions">
       <form method="post" action="/modules/{{ key | urlencode }}/start"
-            data-confirm="{% if not module_res[key].fits %}No cabe: necesita {{ module_res[key].need | human }} y quedan {{ host.mem_available | human }} libres. Pulsa otra vez para forzar{% else %}¿Preparar la clase? Arranca en orden y espera IP. Pulsa otra vez{% endif %}">
-        <button class="btn small {{ 'caution' if not module_res[key].fits }}"
-                title="Arranca las máquinas en orden y espera a que tengan IP">Preparar clase</button>
+            data-confirm-title="Preparar la clase de {{ key }}" data-confirm-label="Preparar"
+            data-confirm="{% if not res.fits %}No cabe en la memoria libre: las máquinas apagadas necesitan {{ res.need | human }} y quedan {{ host.mem_available | human }}. Si sigues, el equipo puede ir muy lento.{% else %}Se arrancan las máquinas apagadas del módulo, de una en una, esperando a que cada una tenga IP.{% endif %}">
+        <button class="btn small {{ 'caution' if not res.fits }}"
+                title="Arranca las máquinas en orden y espera a que tengan IP">{{ icon("play") }} Preparar clase</button>
       </form>
-      <form method="post" action="/modules/{{ key | urlencode }}/stop" data-confirm="¿Recoger? Apaga todas. Pulsa otra vez">
-        <button class="btn small" title="Apaga todas las máquinas del módulo">Recoger</button>
+      <form method="post" action="/modules/{{ key | urlencode }}/stop"
+            data-confirm-title="Recoger {{ key }}" data-confirm-label="Apagar todas"
+            data-confirm="Se apagan todas las máquinas encendidas del módulo.">
+        <button class="btn small" title="Apaga todas las máquinas del módulo">{{ icon("power") }} Recoger</button>
       </form>
-      <a class="btn small" href="/modules/{{ key | urlencode }}/export.md" title="Documentación del laboratorio en Markdown">Exportar</a>
+      <a class="btn small" href="/modules/{{ key | urlencode }}/export.md"
+         title="Descarga la documentación del laboratorio en Markdown">{{ icon("download") }} Exportar</a>
     </div>
     {% endif %}
   </header>
   <div class="table-wrap">
   <table class="machines">
     <thead>
-      <tr><th>Nombre</th><th>Tipo</th><th>CPU</th><th>Memoria</th><th>IP</th><th>Descripción</th><th>Módulo</th><th></th></tr>
+      <tr><th>Máquina</th><th class="c-kind">Tipo</th><th class="c-res">Recursos</th><th class="c-ip">IP</th>
+        {%- if not key %}<th class="c-mod">Módulo</th>{% endif %}<th class="c-act"><span class="sr-only">Acciones</span></th></tr>
     </thead>
     <tbody>
     {% for m, meta in items %}
       <tr data-href="/m/{{ m.kind }}/{{ m.id | urlencode }}" data-key="{{ m.kind }}/{{ m.id }}">
         <td class="name">
-          <span class="dot {{ m.state }} js-dot" title="{{ m.state }}"></span>
-          <a href="/m/{{ m.kind }}/{{ m.id | urlencode }}">{{ m.name }}</a>
+          <div class="m-name">
+            <span class="dot {{ m.state }} js-dot" title="{{ state_es.get(m.state, 'Estado desconocido') }}"></span>
+            <a href="/m/{{ m.kind }}/{{ m.id | urlencode }}">{{ m.name }}</a>
+          </div>
+          {% if meta.description or meta.tag_list %}
+          <div class="m-desc">{{ meta.description }}{% for t in meta.tag_list %}<span class="tag">{{ t }}</span>{% endfor %}</div>
+          {% endif %}
         </td>
-        <td><span class="badge {{ m.kind }}">{{ drivers[m.kind].label }}</span></td>
-        <td>{{ m.cpus }}</td>
-        <td class="nowrap">{{ m.memory }}</td>
+        <td class="c-kind"><span class="badge {{ m.kind }}">{{ drivers[m.kind].label }}</span></td>
+        <td class="res c-res">
+          {%- if not m.vcpus and not m.memory_mib %}Sin límites
+          {%- else %}
+          {%- if m.vcpus %}<strong>{{ "%g" | format(m.vcpus) }}</strong> vCPU{% else %}CPU sin límite{% endif %} ·
+          {% if m.memory_mib %}<strong>{{ m.memory }}</strong>{% else %}RAM sin límite{% endif %}
+          {%- endif -%}
+        </td>
         <td class="mono js-ips">{{ m.ips | join(", ") or "—" }}</td>
-        <td class="desc">
-          {{ meta.description or "" }}
-          {% for t in meta.tag_list %}<span class="tag">{{ t }}</span>{% endfor %}
-        </td>
-        <td>
+        {% if not key %}
+        <td class="c-mod">
           <form method="post" action="/m/{{ m.kind }}/{{ m.id | urlencode }}/module" class="module-pick">
             <input type="hidden" name="next" value="{{ here }}">
             <select name="module" data-autosubmit aria-label="Módulo de {{ m.name }}">
-              <option value="">—</option>
-              {% for k in modules %}<option value="{{ k }}" {% if meta.module == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+              <option value="">Asignar…</option>
+              {% for k in modules %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
             </select>
           </form>
         </td>
-        <td class="js-power" data-state="{{ m.state }}">{{ power_button(m) }}</td>
+        {% endif %}
+        <td class="right"><div class="row-actions js-power" data-state="{{ m.state }}">{{ power_buttons(m) }}</div></td>
       </tr>
     {% endfor %}
     </tbody>
@@ -174,6 +177,14 @@
   </div>
 </section>
 {% else %}
-<div class="card empty">No hay máquinas que coincidan.</div>
+<div class="card empty">
+  {% if total %}
+  <p>Ninguna máquina coincide con estos filtros.</p>
+  <a class="btn" href="/">Ver todas</a>
+  {% else %}
+  <p>Todavía no hay ninguna máquina.</p>
+  <a class="btn primary" href="/new/kvm">{{ icon("plus") }} Crear la primera</a>
+  {% endif %}
+</div>
 {% endfor %}
 {% endblock %}

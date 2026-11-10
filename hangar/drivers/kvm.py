@@ -752,27 +752,29 @@ class KvmDriver(Driver):
             return []
         return sorted(pool.name() for pool in pools)
 
-    def _isos(self, conn) -> list[tuple[str, str]]:
+    def _isos(self, conn, refresh: bool = True) -> list[tuple[str, str]]:
         """(ruta, nombre) de las ISOs de todos los pools activos."""
         isos = []
         for pool in conn.listAllStoragePools(libvirt.VIR_CONNECT_LIST_STORAGE_POOLS_ACTIVE):
-            try:
-                pool.refresh(0)
-            except libvirt.libvirtError:
-                pass
+            if refresh:
+                try:
+                    pool.refresh(0)
+                except libvirt.libvirtError:
+                    pass
             for vol in pool.listAllVolumes():
                 if vol.name().lower().endswith(".iso"):
                     isos.append((vol.path(), f"{vol.name()} ({pool.name()})"))
         return sorted(isos, key=lambda i: i[1].lower())
 
-    def _disk_images(self, conn) -> list[tuple[str, str]]:
+    def _disk_images(self, conn, refresh: bool = True) -> list[tuple[str, str]]:
         """(ruta, nombre) de las imágenes qcow2 de todos los pools activos."""
         images = []
         for pool in conn.listAllStoragePools(libvirt.VIR_CONNECT_LIST_STORAGE_POOLS_ACTIVE):
-            try:
-                pool.refresh(0)
-            except libvirt.libvirtError:
-                pass
+            if refresh:
+                try:
+                    pool.refresh(0)
+                except libvirt.libvirtError:
+                    pass
             for vol in pool.listAllVolumes():
                 if not vol.name().lower().endswith(".qcow2"):
                     continue
@@ -814,7 +816,7 @@ class KvmDriver(Driver):
             isos = self._isos(conn)
             origins = [(f"iso:{path}", f"ISO · {label}") for path, label in isos]
             origins += [(f"image:{path}", f"Imagen · {label}")
-                        for path, label in self._disk_images(conn)]
+                        for path, label in self._disk_images(conn, refresh=False)]
             origins += [(f"clone:{d.name()}", f"Clonar · {d.name()}")
                         for d in sorted(conn.listAllDomains(), key=lambda d: d.name())]
             pools = self._pool_names(conn)
@@ -852,7 +854,7 @@ class KvmDriver(Driver):
             pools = set(self._pool_names(conn))
             default_pool = "default" if "default" in pools else (sorted(pools)[0] if pools else "default")
             isos = [path for path, _ in self._isos(conn)]
-            images = [path for path, _ in self._disk_images(conn)]
+            images = [path for path, _ in self._disk_images(conn, refresh=False)]
             spec = {
                 "name": check_name(values, existing),
                 "vcpus": parse_number(values, "vcpus", "vCPU", minimum=1),
@@ -943,6 +945,33 @@ class KvmDriver(Driver):
                         pass
                 raise
 
+    @staticmethod
+    def _network_args(networks: list[dict]) -> list[str]:
+        """Opciones --network de virt-install. Con la lista vacía hay que decir
+        «none»: si no se pasa nada, virt-install conecta la red por defecto."""
+        if not networks:
+            return ["--network", "none"]
+        args = []
+        for network in networks:
+            args += ["--network", f"{network['type']}={network['name']},model={network['model']}"]
+        return args
+
+    def _delete_volumes(self, paths: list[str], log) -> None:
+        """Borra volúmenes creados para una VM que al final no se pudo crear."""
+        try:
+            conn = self._conn()
+        except DriverError:
+            return
+        try:
+            for path in paths:
+                try:
+                    conn.storageVolLookupByPath(path).delete(0)
+                    log(f"Limpieza: borrado {path}")
+                except libvirt.libvirtError:
+                    pass
+        finally:
+            conn.close()
+
     def _create_from_image(self, spec: dict, log) -> str:
         """Crea una VM desde una imagen qcow2 (cloud) con cloud-init opcional."""
         base = Path(spec["image"])
@@ -988,12 +1017,15 @@ class KvmDriver(Driver):
             log(f"Disco diferencial creado en {target} sobre {base}")
             if spec.get("cloud_init"):
                 seed = self._make_cloud_init(pool, spec["name"], spec["cloud_init"], log)
-        except libvirt.libvirtError as e:
+        except (libvirt.libvirtError, DriverError) as e:
+            # También si falla cloud-init: el disco recién creado no debe quedar huérfano
             if target_vol is not None:
                 try:
                     target_vol.delete(0)
                 except libvirt.libvirtError:
                     pass
+            if isinstance(e, DriverError):
+                raise
             raise DriverError(str(e)) from e
         finally:
             conn.close()
@@ -1010,11 +1042,14 @@ class KvmDriver(Driver):
         if seed:
             command += ["--disk", f"path={seed},device=cdrom"]
         command += ["--import", "--osinfo", osinfo]
-        for network in spec["networks"]:
-            command += ["--network", f"{network['type']}={network['name']},model={network['model']}"]
+        command += self._network_args(spec["networks"])
         command += ["--channel", "unix,target_type=virtio,name=org.qemu.guest_agent.0"]
         command += ["--graphics", "spice", "--noautoconsole"]
-        run_streaming(command, log)
+        try:
+            run_streaming(command, log)
+        except DriverError:
+            self._delete_volumes([target] + ([seed] if seed else []), log)
+            raise
         log("VM creada desde la imagen; si cloud-init está bien configurado, "
             "aplicará usuario, claves y red al arrancar.")
         conn = self._conn()
@@ -1055,8 +1090,7 @@ class KvmDriver(Driver):
             command += ["--disk", f"pool={disk['pool']},size={disk['size_gib']},"
                                   f"format={disk['format']}"]
         command += ["--cdrom", spec["iso"], "--osinfo", osinfo]
-        for network in spec["networks"]:
-            command += ["--network", f"{network['type']}={network['name']},model={network['model']}"]
+        command += self._network_args(spec["networks"])
         command += ["--channel", "unix,target_type=virtio,name=org.qemu.guest_agent.0"]
         command += ["--graphics", "spice", "--noautoconsole"]
         run_streaming(command, log)

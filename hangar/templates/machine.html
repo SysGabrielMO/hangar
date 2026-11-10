@@ -2,68 +2,98 @@
 {% from "_fields.html" import render_fields %}
 {% block title %}{{ m.name }} · Hangar{% endblock %}
 {% block head %}
-{% if m.state == "running" %}<link rel="stylesheet" href="/static/vendor/xterm/xterm.css">{% endif %}
+{% if m.state == "running" %}<link rel="stylesheet" href="{{ static('vendor/xterm/xterm.css') }}">{% endif %}
 {% endblock %}
+{# Mensaje de la última acción. En Ajustes sale dentro de la sección afectada. #}
+{% macro flash() %}
+{% if msg %}<div class="alert ok">{{ icon("check") }}<span>{{ msg }}</span></div>{% endif %}
+{% if error %}<div class="alert error">{{ icon("alert") }}<span>{{ error }}</span></div>{% endif %}
+{% endmacro %}
 {% block content %}
 {% set base_url = "/m/" ~ m.kind ~ "/" ~ (m.id | urlencode) %}
+{% set state_es = {"running": "Encendida", "stopped": "Apagada", "paused": "Pausada"} %}
+{% set section_icons = {"General": "list", "Recursos": "cpu", "Discos": "disk", "Almacenamiento": "disk",
+                        "Red": "network", "Pantalla": "monitor", "Variables de entorno": "settings"} %}
+{% set flash_in_section = tab == "settings" and sec in ("config", "delete") %}
 
-<a href="/" class="back">← Todas las máquinas</a>
+<nav class="crumbs" aria-label="Estás en">
+  <a href="/">Máquinas</a>{{ icon("chevron-right") }}
+  {% if meta.module in modules %}<a href="/?module={{ meta.module | urlencode }}">{{ meta.module }}</a>{{ icon("chevron-right") }}{% endif %}
+  <span>{{ m.name }}</span>
+</nav>
 
 <section class="machine-head">
   <div>
-    <h1><span class="dot {{ m.state }}"></span>{{ m.name }}</h1>
+    <h1>{{ m.name }}</h1>
     <div class="head-meta">
+      <span class="state {{ m.state }}"><span class="dot {{ m.state }}"></span>{{ state_es.get(m.state, "Estado desconocido") }}</span>
       <span class="badge {{ m.kind }}">{{ driver.label }}</span>
-      <span class="muted">{{ {"running": "Encendida", "stopped": "Apagada", "paused": "Pausada"}.get(m.state, "Desconocido") }}</span>
-      {% if meta.module %}<a class="tag module" href="/?module={{ meta.module | urlencode }}" title="{{ modules[meta.module] }}">{{ meta.module }}</a>{% endif %}
+      <form method="post" action="{{ base_url }}/module" class="module-inline">
+        <input type="hidden" name="next" value="{{ request.url.path }}{{ ('?' ~ request.url.query) if request.url.query }}">
+        <select name="module" data-autosubmit aria-label="Módulo" title="Módulo al que pertenece">
+          <option value="">Sin módulo</option>
+          {% for k in modules %}<option value="{{ k }}" {{ "selected" if meta.module == k }}>{{ k }}</option>{% endfor %}
+        </select>
+      </form>
       {% for t in meta.tag_list %}<span class="tag">{{ t }}</span>{% endfor %}
+    </div>
+    <div class="head-facts">
+      <span class="fact">{{ icon("cpu") }}{% if m.vcpus %}<strong>{{ "%g" | format(m.vcpus) }}</strong> vCPU{% else %}CPU sin límite{% endif %}</span>
+      <span class="fact">{{ icon("memory") }}{% if m.memory_mib %}<strong>{{ m.memory }}</strong>{% else %}RAM sin límite{% endif %}</span>
+      {% for ip in m.ips %}
+      <button class="copy" type="button" data-copy="{{ ip }}" title="Copiar la IP">{{ ip }}{{ icon("copy") }}</button>
+      {% endfor %}
     </div>
     {% if meta.description %}<p class="lead">{{ meta.description }}</p>{% endif %}
   </div>
   <div class="actions">
     {% if m.state == "running" %}
     <button class="btn" type="button" id="console-toggle" aria-expanded="false"
-            data-console-url="/m/{{ m.kind }}/{{ m.id | urlencode }}/console/ws"
-            title="Abrir u ocultar la consola sin salir de la ficha">Consola</button>
+            data-console-url="{{ base_url }}/console/ws"
+            title="Abrir u ocultar la consola sin salir de la ficha">{{ icon("terminal") }}<span>Consola</span></button>
     {% endif %}
     {% if m.display %}
-    <form method="post" action="{{ base_url }}/display"
-          title="Abre la pantalla ({{ m.display | upper }}) con virt-viewer en tu escritorio">
-      <button class="btn">Pantalla</button>
+    <form method="post" action="{{ base_url }}/display">
+      <button class="btn" title="Abre la pantalla ({{ m.display | upper }}) con virt-viewer en tu escritorio">{{ icon("monitor") }} Pantalla</button>
     </form>
     {% endif %}
     {% if m.state == "running" %}
-    <form method="post" action="{{ base_url }}/restart" data-confirm="¿Reiniciar? Pulsa otra vez">
-      <button class="btn">Reiniciar</button>
+    <span class="sep"></span>
+    <form method="post" action="{{ base_url }}/restart" data-confirm-title="Reiniciar {{ m.name }}"
+          data-confirm="La máquina se reinicia ahora." data-confirm-label="Reiniciar">
+      <button class="btn">{{ icon("restart") }} Reiniciar</button>
     </form>
-    <form method="post" action="{{ base_url }}/stop" data-confirm="¿Seguro? Pulsa otra vez">
-      <button class="btn danger">Apagar</button>
+    <form method="post" action="{{ base_url }}/stop" data-confirm-title="Apagar {{ m.name }}"
+          data-confirm="Se le pide al sistema que se apague de forma ordenada." data-confirm-label="Apagar" data-confirm-danger>
+      <button class="btn danger">{{ icon("power") }} Apagar</button>
     </form>
-    <form method="post" action="{{ base_url }}/kill" data-confirm="¿Forzar? Pulsa otra vez"
-          title="Corta la máquina en seco, como quitar el cable. Úsalo si no responde a Apagar.">
-      <button class="btn danger subtle">Forzar apagado</button>
+    <form method="post" action="{{ base_url }}/kill" data-confirm-title="Forzar el apagado de {{ m.name }}"
+          data-confirm="Corta la máquina en seco, como quitar el cable: puede perderse lo que no esté guardado. Úsalo solo si no responde a «Apagar»."
+          data-confirm-label="Forzar apagado" data-confirm-danger>
+      <button class="btn danger subtle" title="Corta la máquina en seco. Úsalo si no responde a Apagar.">{{ icon("bolt") }} Forzar</button>
     </form>
     {% elif m.state == "paused" %}
     <form method="post" action="{{ base_url }}/start">
-      <button class="btn primary">Reanudar</button>
+      <button class="btn primary">{{ icon("play") }} Reanudar</button>
     </form>
-    <form method="post" action="{{ base_url }}/kill" data-confirm="¿Forzar? Pulsa otra vez">
-      <button class="btn danger subtle">Forzar apagado</button>
+    <form method="post" action="{{ base_url }}/kill" data-confirm-title="Forzar el apagado de {{ m.name }}"
+          data-confirm="Corta la máquina en seco: puede perderse lo que no esté guardado."
+          data-confirm-label="Forzar apagado" data-confirm-danger>
+      <button class="btn danger subtle">{{ icon("bolt") }} Forzar apagado</button>
     </form>
     {% else %}
     <form method="post" action="{{ base_url }}/start">
-      <button class="btn primary">Arrancar</button>
+      <button class="btn primary">{{ icon("play") }} Arrancar</button>
     </form>
     {% endif %}
   </div>
 </section>
 
-{% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
-{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if not flash_in_section %}{{ flash() }}{% endif %}
 
-<nav class="tabs">
-  {% for key, label in tabs.items() %}
-  <a href="{{ base_url }}?tab={{ key }}" class="{% if tab == key %}active{% endif %}">{{ label }}</a>
+<nav class="tabs" aria-label="Secciones de la máquina">
+  {% for key, (label, tab_icon) in tabs.items() %}
+  <a href="{{ base_url }}?tab={{ key }}" class="{{ 'active' if tab == key }}" {{ 'aria-current="page"' | safe if tab == key }}>{{ icon(tab_icon) }}{{ label }}</a>
   {% endfor %}
 </nav>
 
@@ -71,10 +101,10 @@
 <div class="grid">
   {% for title, rows in m.sections.items() if rows %}
   <section class="card">
-    <h2>{{ title }}</h2>
+    <h2>{{ icon(section_icons.get(title, "list")) }}{{ title }}</h2>
     <dl>
       {% for label, value in rows %}
-      <dt>{{ label }}</dt><dd class="{% if '/' in value or ':' in value %}mono{% endif %}">{{ value }}</dd>
+      <dt>{{ label }}</dt><dd class="{{ 'mono' if '/' in value or ':' in value }}">{{ value }}</dd>
       {% endfor %}
     </dl>
   </section>
@@ -83,46 +113,44 @@
 
 {% elif tab == "metrics" %}
 {% if tab_error %}
-<div class="alert error">{{ tab_error }}</div>
+<div class="alert error">{{ icon("alert") }}<span>{{ tab_error }}</span></div>
 {% elif m.state == "running" and usage %}
 <section class="card metrics-card" data-metrics-url="/api/metrics/{{ m.kind }}/{{ m.id | urlencode }}"
          data-mem-limit="{{ 1 if usage.mem_limit else 0 }}">
   <div class="metrics-head">
-    <h2>Rendimiento</h2>
+    <h2>{{ icon("activity") }}Consumo en vivo</h2>
     <span class="muted small" id="metrics-updated">Ahora</span>
   </div>
   <div class="metrics-grid">
     <div class="metric">
       <div class="metric-title"><span>CPU</span>
         <strong id="metric-cpu">{% if usage.cpu_pct is none %}Midiendo…{% else %}{{ "%.1f" | format(usage.cpu_pct) }} %{% endif %}</strong></div>
-      <canvas class="spark" id="metric-cpu-chart" height="90"></canvas>
-      <span class="muted small" id="metric-cpu-note">% del host</span>
+      <canvas class="spark" id="metric-cpu-chart" height="96"></canvas>
+      <span class="muted small" id="metric-cpu-note">% de toda la CPU del host</span>
     </div>
     <div class="metric">
       <div class="metric-title"><span title="Memoria que ocupa la máquina en el host">RAM</span>
         <strong id="metric-mem">{% if usage.mem_limit %}{{ usage.mem_used | human }} / {{ usage.mem_limit | human }}{% else %}{{ usage.mem_used | human }}{% endif %}</strong></div>
-      <canvas class="spark" id="metric-mem-chart" height="90"></canvas>
+      <canvas class="spark" id="metric-mem-chart" height="96"></canvas>
       <span class="muted small" id="metric-mem-note">{% if usage.mem_limit %}{{ "%.1f" | format(usage.mem_pct) }} % del límite{% else %}sin límite configurado{% endif %}</span>
     </div>
   </div>
-  <p class="muted small">Se actualiza cada 3 s mientras esta pestaña está abierta.
-    La gráfica guarda los últimos minutos de esta sesión.</p>
+  <p class="muted small">Se actualiza cada 3 s mientras esta pestaña está abierta. La gráfica guarda los últimos minutos.</p>
   <script type="application/json" id="metric-history">{{ usage.history | tojson }}</script>
 </section>
 {% else %}
-<section class="card">
-  <h2>Rendimiento</h2>
-  <p class="muted">La máquina está {{ "pausada" if m.state == "paused" else "apagada" }}.
-    Arranca para ver su consumo.</p>
-</section>
+<div class="card empty">
+  <p>La máquina está {{ "pausada" if m.state == "paused" else "apagada" }}. Arráncala para ver su consumo.</p>
+</div>
 {% endif %}
 
 {% elif tab == "network" %}
 {% if tab_error %}
-<div class="alert error">{{ tab_error }}</div>
+<div class="alert error">{{ icon("alert") }}<span>{{ tab_error }}</span></div>
 {% else %}
+<div class="stack narrow">
 <section class="card">
-  <h2>Interfaces ({{ ifaces | length }})</h2>
+  <h2>{{ icon("network") }}Interfaces <span class="n">{{ ifaces | length }}</span></h2>
   {% for i in ifaces %}
   <div class="iface">
     <div class="iface-head">
@@ -130,33 +158,39 @@
         <strong>{{ i.network }}</strong>
         <span class="muted small mono">{{ i.mac }}{% if i.model %} · {{ i.model }}{% endif %}</span>
         <div class="small">
-          IP: <span class="mono">{{ i.ips | join(", ") or i.defined_ip or ("—" if m.state == "running" else "apagada") }}</span>
+          {% set shown = i.ips or ([i.defined_ip] if i.defined_ip else []) %}
+          {% for ip in shown %}
+          <button class="copy" type="button" data-copy="{{ ip.split('/')[0] }}" title="Copiar la IP">{{ ip }}{{ icon("copy") }}</button>
+          {% else %}
+          <span class="muted">{{ "Sin IP" if m.state == "running" else "Apagada, sin IP anotada" }}</span>
+          {% endfor %}
           {% if i.defined_ip %}<span class="tag current" title="IP anotada en Hangar o reserva de la red">configurada</span>{% endif %}
           <span class="muted">· {{ i.ip_config }}</span>
         </div>
         {% if not i.ips and not i.defined_ip and not i.dhcp %}
-        <p class="muted small">Hangar no ve una IP estática configurada dentro de la VM
-          (no hay agente, DHCP ni ARP). Anótala abajo para que salga siempre.</p>
+        <p class="muted small">Hangar no puede ver una IP estática puesta dentro de la máquina (no hay agente, DHCP ni ARP).
+          Anótala abajo para que aparezca siempre.</p>
         {% endif %}
       </div>
       <form method="post" action="{{ base_url }}/network/{{ i.key | urlencode }}/remove"
-            data-confirm="¿Quitar? Pulsa otra vez">
-        <button class="btn small danger subtle">Quitar</button>
+            data-confirm-title="Quitar la interfaz" data-confirm="Se desconecta de «{{ i.network }}» y se quita de la máquina."
+            data-confirm-label="Quitar" data-confirm-danger>
+        <button class="btn small danger subtle">{{ icon("trash") }} Quitar</button>
       </form>
     </div>
-    <details class="ip-form">
-      <summary>{{ ("IP configurada: " ~ i.defined_ip) if i.defined_ip else "Anotar IP configurada" }}</summary>
+    <details class="fold">
+      <summary>{{ ("IP anotada: " ~ i.defined_ip) if i.defined_ip else "Anotar la IP" }}</summary>
       <form method="post" action="{{ base_url }}/network/{{ i.key | urlencode }}/defined-ip" class="inline-form">
         <label>IP / máscara <input name="ip" value="{{ i.defined_ip }}" placeholder="10.0.0.5/24"></label>
         <button class="btn small">Guardar</button>
       </form>
-      <p class="muted small">Se muestra aunque la máquina esté apagada. Déjalo vacío para borrarla.</p>
+      <p class="muted small">Solo es una nota de Hangar: se muestra aunque la máquina esté apagada. Déjalo vacío para borrarla.</p>
     </details>
     {% if i.can_set_ip %}
-    <details class="ip-form">
-      <summary>Cambiar IP</summary>
+    <details class="fold">
+      <summary>Cambiar la IP de la máquina</summary>
       <form method="post" action="{{ base_url }}/network/{{ i.key | urlencode }}/ip" class="inline-form"
-            data-confirm="¿Cambiar la IP? Pulsa otra vez">
+            data-confirm-title="Cambiar la IP" data-confirm="{{ i.set_ip_hint }}" data-confirm-label="Cambiar">
         <label>Modo
           <select name="mode" data-ip-mode>
             <option value="static">Estática</option>
@@ -181,46 +215,32 @@
   {% endfor %}
 </section>
 
-<form class="card edit-form snapshot-new" method="post" action="{{ base_url }}/network/add">
-  <h2>Añadir interfaz</h2>
+<form class="card edit-form" method="post" action="{{ base_url }}/network/add">
+  <h2>{{ icon("plus") }}Añadir interfaz</h2>
   {{ render_fields(iface_fields) }}
   <div class="form-foot">
     <button class="btn primary">Añadir</button>
     <a class="muted small" href="/networks">Ver todas las redes →</a>
   </div>
 </form>
-{% endif %}
-
-{% elif tab == "edit" %}
-{% if tab_error %}
-<div class="alert error">{{ tab_error }}</div>
-{% else %}
-<form class="card edit-form" method="post" action="{{ base_url }}/edit"
-      data-confirm="¿Aplicar a {{ m.name }}? Pulsa otra vez">
-  {{ render_fields(fields) }}
-  <div class="form-foot">
-    <button class="btn primary">Aplicar cambios</button>
-    {% if m.kind == "kvm" and m.state == "running" %}
-    <span class="muted">La VM está encendida: CPU y memoria se aplican en el próximo arranque.</span>
-    {% endif %}
-  </div>
-</form>
+</div>
 {% endif %}
 
 {% elif tab == "disks" %}
 {% if tab_error %}
-<div class="alert error">{{ tab_error }}</div>
+<div class="alert error">{{ icon("alert") }}<span>{{ tab_error }}</span></div>
 {% else %}
+<div class="stack narrow">
 <section class="card">
-  <h2>Discos ({{ disks | length }})</h2>
+  <h2>{{ icon("disk") }}Discos <span class="n">{{ disks | length }}</span></h2>
   {% if disks %}
   <div class="table-wrap flat">
-  <table class="snapshots">
+  <table>
     <thead><tr><th>Dispositivo</th><th>Tamaño</th><th>Formato</th><th>Ruta</th></tr></thead>
     <tbody>
     {% for d in disks %}
       <tr>
-        <td class="name"><strong>{{ d.target }}</strong>{% if d.bus %} <span class="tag">{{ d.bus }}</span>{% endif %}</td>
+        <td class="nowrap"><strong>{{ d.target }}</strong>{% if d.bus %} <span class="tag">{{ d.bus }}</span>{% endif %}</td>
         <td class="nowrap">{{ d.size | human if d.size else "—" }}</td>
         <td class="muted">{{ d.format or "—" }}</td>
         <td class="mono small">{{ d.path }}</td>
@@ -232,27 +252,30 @@
   {% else %}
   <p class="muted">No hay discos de datos.</p>
   {% endif %}
+  <p class="muted small">Para ampliar un disco que ya existe, ve a <a href="{{ base_url }}?tab=settings">Ajustes</a>.</p>
 </section>
 
 <form class="card edit-form" method="post" action="{{ base_url }}/disks/add"
-      data-confirm="¿Crear y conectar el disco? Pulsa otra vez">
-  <h2>Añadir disco</h2>
+      data-confirm-title="Añadir un disco" data-confirm="Se crea un disco vacío y se conecta a {{ m.name }}." data-confirm-label="Crear y conectar">
+  <h2>{{ icon("plus") }}Añadir disco</h2>
   {{ render_fields(disk_fields) }}
   <div class="form-foot">
     <button class="btn primary">Crear y conectar</button>
-    <span class="muted small">Se crea vacío: luego tienes que formatearlo y montarlo dentro de la VM.</span>
+    <span class="muted small">Se crea vacío: luego hay que formatearlo y montarlo dentro de la VM.</span>
   </div>
 </form>
+</div>
 {% endif %}
 
 {% elif tab == "snapshots" %}
 {% if driver.no_snapshots_reason %}
-<div class="alert info">{{ driver.no_snapshots_reason }}</div>
+<div class="alert info">{{ icon("info") }}<span>{{ driver.no_snapshots_reason }}</span></div>
 {% elif tab_error %}
-<div class="alert error">{{ tab_error }}</div>
+<div class="alert error">{{ icon("alert") }}<span>{{ tab_error }}</span></div>
 {% else %}
+<div class="stack">
 <section class="card">
-  <h2>Snapshots ({{ snaps | length }})</h2>
+  <h2>{{ icon("camera") }}Snapshots <span class="n">{{ snaps | length }}</span></h2>
   {% if snaps %}
   <div class="table-wrap flat">
   <table class="snapshots">
@@ -260,7 +283,7 @@
     <tbody>
     {% for s in snaps | reverse %}
       <tr>
-        <td class="name"><strong>{{ s.name }}</strong>
+        <td><strong>{{ s.name }}</strong>
           {% if s.current %}<span class="tag current" title="La máquina parte de este snapshot">actual</span>{% endif %}
           {% if s.parent %}<div class="muted small">desde {{ s.parent }}</div>{% endif %}
         </td>
@@ -269,12 +292,14 @@
         <td>{{ s.description }}</td>
         <td><div class="row-actions">
           <form method="post" action="{{ base_url }}/snapshots/{{ s.name | urlencode }}/revert"
-                data-confirm="¿Volver? Se pierde lo no guardado">
-            <button class="btn small">Volver a este</button>
+                data-confirm-title="Volver a «{{ s.name }}»" data-confirm-label="Volver a este snapshot"
+                data-confirm="La máquina vuelve a como estaba el {{ s.created }}. Se pierde todo lo que haya cambiado después.">
+            <button class="btn small">{{ icon("restart") }} Volver a este</button>
           </form>
           <form method="post" action="{{ base_url }}/snapshots/{{ s.name | urlencode }}/delete"
-                data-confirm="¿Borrar? Pulsa otra vez">
-            <button class="btn small danger subtle">Borrar</button>
+                data-confirm-title="Borrar el snapshot «{{ s.name }}»" data-confirm-label="Borrar" data-confirm-danger
+                data-confirm="No se podrá volver a este punto. La máquina no cambia.">
+            <button class="btn small danger subtle" title="Borrar el snapshot" aria-label="Borrar el snapshot {{ s.name }}">{{ icon("trash") }}</button>
           </form>
         </div></td>
       </tr>
@@ -283,12 +308,12 @@
   </table>
   </div>
   {% else %}
-  <p class="muted">Todavía no hay snapshots.</p>
+  <p class="muted">Todavía no hay snapshots. Haz uno antes de un cambio arriesgado para poder volver atrás.</p>
   {% endif %}
 </section>
 
-<form class="card edit-form snapshot-new" method="post" action="{{ base_url }}/snapshots/create">
-  <h2>Nuevo snapshot</h2>
+<form class="card edit-form" method="post" action="{{ base_url }}/snapshots/create">
+  <h2>{{ icon("plus") }}Nuevo snapshot</h2>
   {% if not driver.snapshot_name_auto %}
   <div class="field">
     <label for="f-snap-name">Nombre</label>
@@ -300,76 +325,47 @@
     <input id="f-snap-desc" name="description" placeholder="Antes de instalar Apache…">
   </div>
   <div class="form-foot">
-    <button class="btn primary" {% if m.kind == "lxc" and m.state != "stopped" %}disabled{% endif %}>Crear snapshot</button>
+    <button class="btn primary" {{ "disabled" if m.kind == "lxc" and m.state != "stopped" }}>{{ icon("camera") }} Crear snapshot</button>
     {% if m.kind == "lxc" %}
-    <span class="muted">En LXC el contenedor debe estar apagado para crear o volver a un snapshot (se copia el rootfs entero).</span>
+    <span class="muted small">En LXC el contenedor debe estar apagado para crear o volver a un snapshot (se copia el rootfs entero).</span>
     {% elif m.state == "running" %}
-    <span class="muted">Está encendida: se guarda también la memoria, y la VM se pausa unos segundos.</span>
+    <span class="muted small">Está encendida: se guarda también la memoria, y la VM se pausa unos segundos.</span>
     {% endif %}
   </div>
 </form>
-{% endif %}
-
-{% elif tab == "delete" %}
-{% if tab_error %}
-<div class="alert error">{{ tab_error }}</div>
-{% else %}
-<form class="card edit-form danger-zone" method="post" action="{{ base_url }}/delete">
-  <h2>Borrar {{ m.name }}</h2>
-  {% if m.state != "stopped" %}
-  <div class="alert error">Está {{ "encendida" if m.state == "running" else "pausada" }}: apágala antes de borrarla.</div>
-  {% endif %}
-  <div class="plan">
-    <div>
-      <strong>Se borrará</strong>
-      <ul>{% for item in plan.delete %}<li>{{ item }}</li>{% endfor %}</ul>
-    </div>
-    {% if plan.keep %}
-    <div>
-      <strong>Se conserva</strong>
-      <ul>{% for item in plan.keep %}<li>{{ item }}</li>{% endfor %}</ul>
-    </div>
-    {% endif %}
-  </div>
-  {{ render_fields(plan.options) }}
-  <div class="field">
-    <label for="f-confirm">Escribe <code>{{ m.name }}</code> para confirmar</label>
-    <input id="f-confirm" name="confirm_name" autocomplete="off" required>
-  </div>
-  <div class="form-foot">
-    <button class="btn danger-solid" {% if m.state != "stopped" %}disabled{% endif %}>Borrar para siempre</button>
-    <span class="muted">No se puede deshacer.</span>
-  </div>
-</form>
+</div>
 {% endif %}
 
 {% elif tab == "users" %}
+{% if tab_error %}
+<div class="alert error">{{ icon("alert") }}<span>{{ tab_error }}</span></div>
+{% else %}
 <section class="card">
-  {% if tab_error %}
-    <div class="alert error">{{ tab_error }}</div>
-  {% else %}
+  <h2>{{ icon("users") }}Usuarios <span class="n">{{ users | length }}</span></h2>
+  <div class="table-wrap flat">
   <table class="users">
     <thead><tr><th>Usuario</th><th>UID</th><th>Home</th><th>Shell</th></tr></thead>
     <tbody>
     {% for u in users %}
-      <tr class="{% if not u.can_login %}system{% endif %}">
-        <td><strong>{{ u.name }}</strong>{% if u.can_login %} <span class="tag">login</span>{% endif %}</td>
+      <tr class="{{ 'system' if not u.can_login }}">
+        <td><strong>{{ u.name }}</strong>{% if u.can_login %} <span class="tag current">login</span>{% endif %}</td>
         <td>{{ u.uid }}</td><td class="mono">{{ u.home }}</td><td class="mono">{{ u.shell }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  {% endif %}
+  </div>
 </section>
+{% endif %}
 
 {% elif tab == "notes" %}
 <div class="grid notes">
-  <form class="card" method="post" action="{{ base_url }}/meta">
-    <h2>Editar</h2>
+  <form class="card notes-form" method="post" action="{{ base_url }}/meta">
+    <h2>{{ icon("note") }}Editar</h2>
     <label>Módulo
       <select name="module">
         <option value="">— Sin módulo —</option>
-        {% for k, label in modules.items() %}<option value="{{ k }}" {% if meta.module == k %}selected{% endif %}>{{ k }} · {{ label }}</option>{% endfor %}
+        {% for k, label in modules.items() %}<option value="{{ k }}" {{ "selected" if meta.module == k }}>{{ k }} · {{ label }}</option>{% endfor %}
       </select>
     </label>
     <label>Descripción corta
@@ -383,39 +379,98 @@
     </label>
     <div class="form-foot">
       <button class="btn primary">Guardar</button>
-      {% if meta.updated_at %}<span class="muted">Última edición: {{ meta.updated_at.replace("T", " ") }}</span>{% endif %}
+      {% if meta.updated_at %}<span class="muted small">Última edición: {{ meta.updated_at.replace("T", " ") }}</span>{% endif %}
     </div>
   </form>
-  <section class="card prose">
+  <section class="card">
     <h2>Vista previa</h2>
-    {% if meta.notes %}{{ meta.notes | markdown }}{% else %}<p class="muted">Aún no hay notas.</p>{% endif %}
+    <div class="prose">
+      {% if meta.notes %}{{ meta.notes | markdown }}{% else %}<p class="muted">Aún no hay notas. Apunta aquí cómo está montada la máquina: servicios, puertos, usuarios del laboratorio…</p>{% endif %}
+    </div>
   </section>
 </div>
 
-{% elif tab == "config" %}
-{% if tab_error %}<div class="alert error">{{ tab_error }}</div>{% endif %}
-<section class="card">
-  <h2>{{ m.raw_label }}</h2>
-  <pre class="raw">{{ m.raw_config }}</pre>
-</section>
-{% if m.kind == "kvm" and not tab_error %}
-<section class="card">
-  <h2>Agente QEMU</h2>
-  {% if has_agent %}
-  <p class="muted">El canal <code>org.qemu.guest_agent.0</code> ya está configurado.</p>
-  {% else %}
-  <p class="muted">La VM no tiene el canal del agente. Sin él, Hangar no puede leer
-    las IPs estáticas ni usar el agente para otras tareas.</p>
-  <form method="post" action="{{ base_url }}/agent"
-        data-confirm="¿Añadir el canal del agente? Pulsa otra vez">
-    <button class="btn primary small">Añadir canal del agente</button>
-  </form>
-  {% endif %}
-  <p class="small muted">Dentro de la VM instala y arranca el agente:</p>
-  <pre class="raw small">sudo apt install qemu-guest-agent
+{% elif tab == "settings" %}
+<div class="stack narrow">
+  <section id="edit">
+    {% if edit_error %}
+    <div class="alert error">{{ icon("alert") }}<span>{{ edit_error }}</span></div>
+    {% else %}
+    <form class="card edit-form" method="post" action="{{ base_url }}/edit"
+          data-confirm-title="Aplicar los cambios" data-confirm="Se cambia la configuración de {{ m.name }}." data-confirm-label="Aplicar">
+      <h2>{{ icon("cpu") }}Recursos</h2>
+      {{ render_fields(fields) }}
+      <div class="form-foot">
+        <button class="btn primary">Aplicar cambios</button>
+        {% if m.kind == "kvm" and m.state == "running" %}
+        <span class="muted small">Está encendida: CPU y memoria se aplican en el próximo arranque.</span>
+        {% endif %}
+      </div>
+    </form>
+    {% endif %}
+  </section>
+
+  <div id="config">
+    {% if flash_in_section and sec == "config" %}{{ flash() }}{% endif %}
+    {% if m.kind == "kvm" %}
+    <section class="card">
+      <h2>{{ icon("activity") }}Agente QEMU</h2>
+      {% if has_agent %}
+      <p class="muted">El canal <code>org.qemu.guest_agent.0</code> ya está configurado.</p>
+      {% else %}
+      <p class="muted">La VM no tiene el canal del agente. Sin él, Hangar no puede leer las IPs estáticas,
+        los usuarios ni cambiar la IP desde fuera.</p>
+      <form method="post" action="{{ base_url }}/agent"
+            data-confirm-title="Añadir el canal del agente" data-confirm="Se añade a la configuración de {{ m.name }}." data-confirm-label="Añadir">
+        <button class="btn primary small">{{ icon("plus") }} Añadir canal del agente</button>
+      </form>
+      {% endif %}
+      <p class="small muted">Dentro de la VM, instala y arranca el agente:</p>
+      <pre class="raw small">sudo apt install qemu-guest-agent
 sudo systemctl enable --now qemu-guest-agent</pre>
-</section>
-{% endif %}
+    </section>
+    {% endif %}
+    <details class="card">
+      <summary>{{ icon("note") }}{{ m.raw_label }} <span class="muted small">(solo lectura)</span>{{ icon("chevron-down", "chev") }}</summary>
+      <pre class="raw">{{ m.raw_config }}</pre>
+    </details>
+  </div>
+
+  <section id="delete">
+    {% if flash_in_section and sec == "delete" %}{{ flash() }}{% endif %}
+    {% if plan_error %}
+    <div class="alert error">{{ icon("alert") }}<span>{{ plan_error }}</span></div>
+    {% else %}
+    <form class="card edit-form danger-zone" method="post" action="{{ base_url }}/delete">
+      <h2>{{ icon("trash") }}Borrar {{ m.name }}</h2>
+      {% if m.state != "stopped" %}
+      <div class="alert warn">{{ icon("alert") }}<span>Está {{ "encendida" if m.state == "running" else "pausada" }}: apágala antes de borrarla.</span></div>
+      {% endif %}
+      <div class="plan">
+        <div>
+          <strong>Se borrará</strong>
+          <ul>{% for item in plan.delete %}<li>{{ item }}</li>{% endfor %}</ul>
+        </div>
+        {% if plan.keep %}
+        <div>
+          <strong>Se conserva</strong>
+          <ul>{% for item in plan.keep %}<li>{{ item }}</li>{% endfor %}</ul>
+        </div>
+        {% endif %}
+      </div>
+      {{ render_fields(plan.options) }}
+      <div class="field">
+        <label for="f-confirm">Escribe <code>{{ m.name }}</code> para confirmar</label>
+        <input id="f-confirm" name="confirm_name" autocomplete="off" required>
+      </div>
+      <div class="form-foot">
+        <button class="btn danger-solid" {{ "disabled" if m.state != "stopped" }}>{{ icon("trash") }} Borrar para siempre</button>
+        <span class="muted small">No se puede deshacer.</span>
+      </div>
+    </form>
+    {% endif %}
+  </section>
+</div>
 {% endif %}
 
 {% if m.state == "running" %}
@@ -432,9 +487,14 @@ sudo systemctl enable --now qemu-guest-agent</pre>
   </div>
   <div class="console-drawer-term" id="console-drawer-term"></div>
 </section>
-<script src="/static/vendor/xterm/xterm.js"></script>
-<script src="/static/vendor/xterm/addon-fit.js"></script>
-<script src="/static/xterm-keys.js"></script>
 {% endif %}
+{% endblock %}
 
+{% block scripts %}
+{% if m.state == "running" %}
+<script src="{{ static('vendor/xterm/xterm.js') }}"></script>
+<script src="{{ static('vendor/xterm/addon-fit.js') }}"></script>
+<script src="{{ static('xterm-keys.js') }}"></script>
+<script>initConsoleDrawer();</script>
+{% endif %}
 {% endblock %}

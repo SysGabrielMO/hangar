@@ -68,22 +68,29 @@ def _libvirt_networks(conn) -> list[Net]:
 
 
 def _docker_networks(client) -> list[Net]:
+    # La lista de redes de Docker no dice quién hay en cada una: se saca de los
+    # contenedores, que además incluye los que están parados.
+    members: dict[str, list] = {}
+    for c in client.containers.list(all=True):
+        for net_name, cfg in ((c.attrs.get("NetworkSettings") or {}).get("Networks") or {}).items():
+            ip = (cfg or {}).get("IPAddress") or ((cfg or {}).get("IPAMConfig") or {}).get("IPv4Address")
+            members.setdefault(net_name, []).append(("docker", c.name, c.name, [ip] if ip else []))
+
     nets = []
     for n in sorted(client.networks.list(), key=lambda n: n.name):
-        cfg = (n.attrs.get("IPAM", {}).get("Config") or [{}])[0]
-        net = Net(name=n.name, kind="docker", mode=n.attrs.get("Driver", ""),
-                  subnet=cfg.get("Subnet", ""), gateway=cfg.get("Gateway", ""),
-                  bridge=(n.attrs.get("Options") or {}).get("com.docker.network.bridge.name", ""),
-                  builtin=n.name in ("bridge", "host", "none"))
-        for cid, c in (n.attrs.get("Containers") or {}).items():
-            net.members.append(("docker", c.get("Name", cid[:12]), c.get("Name", cid[:12]),
-                                [c["IPv4Address"]] if c.get("IPv4Address") else []))
-        nets.append(net)
+        configs = n.attrs.get("IPAM", {}).get("Config") or [{}]
+        # La configuración IPv4 (una red puede tener también una IPv6)
+        cfg = next((c for c in configs if ":" not in c.get("Subnet", "")), configs[0])
+        nets.append(Net(name=n.name, kind="docker", mode=n.attrs.get("Driver", ""),
+                        subnet=cfg.get("Subnet", ""), gateway=cfg.get("Gateway", ""),
+                        bridge=(n.attrs.get("Options") or {}).get("com.docker.network.bridge.name", ""),
+                        builtin=n.name in ("bridge", "host", "none"),
+                        members=sorted(members.get(n.name, []), key=lambda m: m[2].lower())))
     return nets
 
 
-def collect():
-    """Todas las redes y quién está en cada una."""
+def _networks() -> tuple[list[Net], list[Net], list[str]]:
+    """Redes de libvirt y de Docker (sin mirar las máquinas) y los errores."""
     errors, libvirt_nets, docker_nets = [], [], []
     try:
         conn = libvirt.open(URI)
@@ -101,6 +108,35 @@ def collect():
             client.close()
     except (DockerException, DriverError) as e:
         errors.append(str(e) if isinstance(e, DriverError) else f"Docker: {e}")
+    return libvirt_nets, docker_nets, errors
+
+
+def dhcp_range(iface: ipaddress.IPv4Interface) -> tuple[ipaddress.IPv4Address,
+                                                        ipaddress.IPv4Address] | None:
+    """Rango DHCP para una red cuyo host tiene la IP `iface`: la mitad alta de
+    la subred, dejando la baja para IPs fijas y sin incluir nunca la del host.
+    None si la subred es tan pequeña que no queda sitio."""
+    subnet = iface.network
+    first, last = int(subnet.network_address) + 1, int(subnet.broadcast_address) - 1
+    start = first + (last - first + 1) // 2
+    host = int(iface.ip)
+    if start <= host <= last:
+        # El host cae en la mitad alta: se usa el trozo más grande que no lo pise
+        if host - start >= last - host:
+            last = host - 1
+        else:
+            start = host + 1
+    if start > last:
+        # Sin sitio arriba (subredes de 2 hosts): lo que quede libre por debajo
+        if host <= first:
+            return None
+        start, last = first, host - 1
+    return ipaddress.IPv4Address(start), ipaddress.IPv4Address(last)
+
+
+def collect():
+    """Todas las redes y quién está en cada una."""
+    libvirt_nets, docker_nets, errors = _networks()
 
     by_name = {n.name: n for n in libvirt_nets}
     by_bridge = {n.bridge: n for n in libvirt_nets if n.bridge}
@@ -136,10 +172,15 @@ def networks_page(request: Request, msg: str = "", error: str = ""):
     })
 
 
-def _check_overlap(subnet: ipaddress.IPv4Network, name: str) -> None:
-    libvirt_nets, _, docker_nets, _ = collect()
+def _check_overlap(subnet: ipaddress.IPv4Network) -> None:
+    libvirt_nets, docker_nets, _ = _networks()
     for other in libvirt_nets + docker_nets:
-        if other.subnet and subnet.overlaps(ipaddress.ip_network(other.subnet)):
+        try:
+            other_subnet = ipaddress.ip_network(other.subnet) if other.subnet else None
+        except ValueError:
+            continue
+        if other_subnet is not None and other_subnet.version == 4 \
+                and subnet.overlaps(other_subnet):
             raise DriverError(f"{subnet} se solapa con la red «{other.name}» ({other.subnet}).")
 
 
@@ -160,7 +201,7 @@ def create_libvirt(request: Request, name: str = Form(""), mode: str = Form("nat
         subnet = iface.network
         if subnet.prefixlen > 30 or iface.ip in (subnet.network_address, subnet.broadcast_address):
             raise DriverError(f"{iface} no sirve como IP del host en {subnet}.")
-        _check_overlap(subnet, name)
+        _check_overlap(subnet)
 
         root = ET.Element("network")
         ET.SubElement(root, "name").text = name
@@ -170,11 +211,11 @@ def create_libvirt(request: Request, name: str = Form(""), mode: str = Form("nat
         ip = ET.SubElement(root, "ip", address=str(iface.ip), prefix=str(subnet.prefixlen))
         dhcp_note = "sin DHCP"
         if dhcp:
-            hosts = list(subnet.hosts())
-            # Rango en la mitad alta, dejando la baja para IPs estáticas
-            start, end = hosts[len(hosts) // 2], hosts[-1]
-            if iface.ip in (start, end):
-                start = hosts[len(hosts) // 2 + 1]
+            rng = dhcp_range(iface)
+            if rng is None:
+                raise DriverError(f"{subnet} es demasiado pequeña para repartir IPs por DHCP: "
+                                  "usa una máscara más amplia o desmarca DHCP.")
+            start, end = rng
             ET.SubElement(ET.SubElement(ip, "dhcp"), "range", start=str(start), end=str(end))
             dhcp_note = f"DHCP {start} – {end}"
 
@@ -239,10 +280,12 @@ def create_docker(name: str = Form(""), subnet: str = Form("")):
         ipam = None
         if subnet.strip():
             try:
-                net = ipaddress.IPv4Network(subnet.strip())
+                net = ipaddress.IPv4Network(subnet.strip(), strict=False)
             except ValueError:
                 raise DriverError("Subred: escríbela como 172.30.0.0/24") from None
-            _check_overlap(net, name)
+            if net.prefixlen > 30:
+                raise DriverError(f"{net} es demasiado pequeña para una red de contenedores.")
+            _check_overlap(net)
             ipam = docker.types.IPAMConfig(pool_configs=[docker.types.IPAMPool(
                 subnet=str(net), gateway=str(next(net.hosts())))])
         client = docker_client()
@@ -254,7 +297,7 @@ def create_docker(name: str = Form(""), subnet: str = Form("")):
         return _back(error=str(e))
     except DockerException as e:
         return _back(error=getattr(e, "explanation", None) or str(e))
-    return _back(f"Red Docker «{name}» creada" + (f" ({subnet.strip()})." if ipam else "."))
+    return _back(f"Red Docker «{name}» creada" + (f" ({net})." if ipam else "."))
 
 
 @router.post("/networks/docker/{name}/delete")

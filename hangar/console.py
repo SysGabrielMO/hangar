@@ -25,6 +25,7 @@ from .common import (TOKEN_COOKIE, back, driver_or_404, host_allowed, list_all, 
 from .drivers import DRIVERS, DriverError
 
 router = APIRouter()
+WRITE_TIMEOUT = 5      # segundos esperando a que la máquina lea lo que se le escribe
 
 
 @router.get("/consoles")
@@ -122,12 +123,17 @@ async def console_ws(ws: WebSocket, kind: str, machine_id: str):
         return
 
     proc, master = _spawn(cmd)
+    # Sin bloqueo: si la máquina deja de leer (una VM colgada) y se pega un texto
+    # largo, una escritura bloqueante pararía el bucle de eventos y, con él, todo Hangar.
+    os.set_blocking(master, False)
     loop = asyncio.get_running_loop()
     output: asyncio.Queue[bytes] = asyncio.Queue()
 
     def readable():
         try:
             data = os.read(master, 65536)
+        except BlockingIOError:  # aviso en falso: todavía no hay nada que leer
+            return
         except OSError:          # el proceso terminó y se cerró el pty
             data = b""
         if not data:
@@ -137,22 +143,36 @@ async def console_ws(ws: WebSocket, kind: str, machine_id: str):
     loop.add_reader(master, readable)
 
     async def pump_output():
-        while data := await output.get():
-            await ws.send_bytes(data)
-        with contextlib.suppress(RuntimeError):
+        # El navegador puede cerrar en mitad de un envío: no es un error
+        with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+            while data := await output.get():
+                await ws.send_bytes(data)
             await ws.send_text("\r\n\x1b[2m[sesión terminada]\x1b[0m\r\n")
             await ws.close()
+
+    async def write_input(data: bytes) -> None:
+        view, deadline = memoryview(data), loop.time() + WRITE_TIMEOUT
+        while view:
+            try:
+                view = view[os.write(master, view):]
+            except BlockingIOError:
+                if loop.time() > deadline:
+                    return       # nadie lee al otro lado: se descarta el resto
+                await asyncio.sleep(0.02)
 
     pump = asyncio.create_task(pump_output())
     try:
         while True:
             msg = json.loads(await ws.receive_text())
             if msg.get("type") == "input":
-                os.write(master, msg["data"].encode())
+                await write_input(str(msg["data"]).encode())
             elif msg.get("type") == "resize":
                 rows, cols = int(msg["rows"]), int(msg["cols"])
-                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-    except (WebSocketDisconnect, RuntimeError, OSError, ValueError, KeyError):
+                if 0 < rows < 1000 and 0 < cols < 1000:
+                    fcntl.ioctl(master, termios.TIOCSWINSZ,
+                                struct.pack("HHHH", rows, cols, 0, 0))
+    except (WebSocketDisconnect, RuntimeError, OSError, ValueError, KeyError, TypeError,
+            AttributeError):
         pass
     finally:
         loop.remove_reader(master)

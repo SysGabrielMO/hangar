@@ -135,14 +135,14 @@ Al modificar un contenedor, el ayudante guarda antes una copia del config en
 
 ## Panel de capacidad
 
-La portada muestra, encima de la lista, la RAM y la carga del host, el disco
-de `/var/lib` (imágenes de VM, LXC y Docker) y la RAM/vCPU que suman los
-límites configurados en las máquinas. Si entre todas superan la RAM del host,
+La barra lateral muestra siempre la RAM, la carga y el disco del host
+(`/var/lib`: imágenes de VM, LXC y Docker). La portada añade la RAM/vCPU que
+suman los límites configurados en las máquinas. Si entre todas superan la RAM del host,
 avisa en ámbar.
 
 Cada módulo indica lo que necesita y, si sus máquinas apagadas no caben en la
 memoria libre, «Preparar clase» lo advierte antes de lanzar la tarea (se
-puede forzar con un segundo clic).
+puede forzar desde el diálogo de confirmación).
 
 Los botones ▶/■ de cada fila arrancan o paran esa máquina sin abrir la ficha.
 El estado, las IPs y las cifras del host se refrescan solos cada 6 segundos.
@@ -203,7 +203,8 @@ Para añadir algo nuevo a las tres tecnologías: añade el método en
 
 Cada máquina puede pertenecer a un módulo del grado (ASO, BBDD, IMPWEB,
 SERVICIOS, INFRAESTRUCTURA, PROYECTO INTEGRADO, SEGURIDAD). Se asigna desde el
-desplegable de la portada, en «Descripción y notas» o al crearla. La lista
+desplegable de la cabecera de su ficha, en «Notas», al crearla o, si aún no
+tiene módulo, desde la portada. La lista
 está en `MODULES` de `hangar/db.py`.
 
 Por módulo puedes **preparar la clase** (arranca las máquinas en orden, espera
@@ -241,7 +242,7 @@ sin `--memory`), se muestra el consumo en MiB/GiB y «sin límite configurado».
 - **Copiar y pegar** en cualquier terminal: `Ctrl+Shift+C` y `Ctrl+Shift+V`,
   como en Terminator.
 - **Varias consolas**: el enlace «Abrir en pestañas» del cajón (o **Consolas**
-  en la barra superior) abre un espacio con varias terminales en pestañas.
+  en la barra lateral) abre un espacio con varias terminales en pestañas.
   Puedes añadir máquinas con «Añadir consola»; la URL y el navegador recuerdan
   las abiertas.
 - **Pantalla** (VMs con SPICE/VNC): abre `virt-viewer` en tu escritorio.
@@ -275,7 +276,7 @@ ARP, el hipervisor no puede conocerla: anótala en Red o instala
 ## Agente QEMU
 
 Las VM nuevas se crean ya con el canal `org.qemu.guest_agent.0`. Para una VM
-antigua, abre **Configuración → Agente QEMU** y pulsa **Añadir canal del
+antigua, abre **Ajustes → Agente QEMU** y pulsa **Añadir canal del
 agente**; si está encendida se intenta en caliente y, si no, se aplica al
 reiniciar.
 

@@ -1,25 +1,125 @@
-// Confirmación en dos clics para formularios con data-confirm.
-// No se usa window.confirm() porque algunos navegadores integrados lo
-// bloquean y devuelven "cancelar" sin mostrar nada.
-document.querySelectorAll("form[data-confirm]").forEach((form) => {
-  const button = form.querySelector("button");
-  const original = button.textContent;
+// Hangar · comportamiento de la interfaz (sin dependencias).
 
-  form.addEventListener("submit", (event) => {
-    if (form.dataset.armed === "1") return;   // segundo clic: se envía
+// base.html deja en HANGAR_ICONS la URL del sprite con su versión
+const ICONS = window.HANGAR_ICONS || "/static/icons.svg";
+const icon = (name) =>
+  `<svg class="icon" aria-hidden="true"><use href="${ICONS}#${name}"/></svg>`;
+
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[c]));
+
+// Igual que human_bytes() del servidor
+const fmtBytes = (n) => {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+  return `${i <= 1 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+};
+
+function toast(text, isError = false) {
+  const box = document.getElementById("toasts");
+  if (!box) return;
+  const item = document.createElement("div");
+  item.className = "toast" + (isError ? " error" : "");
+  item.textContent = text;
+  box.appendChild(item);
+  setTimeout(() => item.remove(), 4500);
+}
+
+// --- Tema claro / oscuro --------------------------------------------------
+
+document.getElementById("theme-toggle")?.addEventListener("click", () => {
+  const root = document.documentElement;
+  const current = root.dataset.theme
+    || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = current === "dark" ? "light" : "dark";
+  root.dataset.theme = next;
+  try {
+    localStorage.setItem("hangar.theme", next);
+  } catch (error) {
+    // sin almacenamiento local: el tema dura hasta recargar
+  }
+  window.dispatchEvent(new Event("resize"));   // las gráficas se repintan con los colores nuevos
+});
+
+// --- Confirmaciones -------------------------------------------------------
+// Diálogo propio en vez de window.confirm(), que algunos navegadores
+// integrados bloquean y devuelven "cancelar" sin mostrar nada.
+
+function askConfirm({ title, text, label, danger }) {
+  const dialog = document.getElementById("confirm-dialog");
+  if (!dialog || typeof dialog.showModal !== "function") {
+    return Promise.resolve(window.confirm(`${title}\n\n${text || ""}`));
+  }
+  const ok = document.getElementById("confirm-ok");
+  document.getElementById("confirm-title").textContent = title || "¿Seguro?";
+  const body = document.getElementById("confirm-text");
+  body.textContent = text || "";
+  body.hidden = !text;
+  ok.textContent = label || "Confirmar";
+  ok.className = `btn ${danger ? "danger-solid" : "primary"}`;
+  return new Promise((resolve) => {
+    dialog.returnValue = "";
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
+    dialog.showModal();
+    // En lo peligroso el foco empieza en «Cancelar»: un Enter de más no rompe nada
+    (danger ? document.getElementById("confirm-cancel") : ok).focus();
+  });
+}
+
+document.getElementById("confirm-dialog")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) event.currentTarget.close("cancel");   // clic fuera
+});
+
+// Evita enviar dos veces el mismo formulario (doble clic en «Crear snapshot»…)
+function markSent(form) {
+  form.dataset.sent = "1";
+  form.querySelectorAll("button").forEach((button) => {
+    if (button.disabled) return;
+    button.setAttribute("aria-busy", "true");
+    setTimeout(() => { button.disabled = true; }, 0);
+  });
+}
+
+document.addEventListener("submit", async (event) => {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement) || form.method === "dialog") return;
+  if (form.dataset.sent === "1") {
     event.preventDefault();
-    form.dataset.armed = "1";
-    button.textContent = form.dataset.confirm;
-    button.classList.add("armed");
-    setTimeout(() => {                        // si no confirma, se desarma
-      form.dataset.armed = "";
-      button.textContent = original;
-      button.classList.remove("armed");
-    }, 4000);
+    return;
+  }
+  if (form.dataset.confirm === undefined) {
+    if (form.method === "post") markSent(form);
+    return;
+  }
+  event.preventDefault();
+  const button = event.submitter || form.querySelector("button");
+  const confirmed = await askConfirm({
+    title: form.dataset.confirmTitle,
+    text: form.dataset.confirm,
+    label: form.dataset.confirmLabel || button?.textContent.trim(),
+    danger: form.dataset.confirmDanger !== undefined,
+  });
+  if (!confirmed) return;
+  markSent(form);
+  form.submit();
+});
+
+// Al volver atrás el navegador restaura la página tal cual: se reactivan los botones
+window.addEventListener("pageshow", () => {
+  document.querySelectorAll("form[data-sent]").forEach((form) => {
+    delete form.dataset.sent;
+    form.querySelectorAll("button[aria-busy]").forEach((button) => {
+      button.removeAttribute("aria-busy");
+      button.disabled = false;
+    });
   });
 });
 
-// Selects que guardan al cambiar (p. ej. el módulo en la portada)
+// --- Pequeñas ayudas ------------------------------------------------------
+
+// Selects que guardan al cambiar (p. ej. el módulo)
 document.querySelectorAll("select[data-autosubmit]").forEach((select) => {
   select.addEventListener("change", () => select.form.submit());
 });
@@ -28,6 +128,7 @@ document.querySelectorAll("select[data-autosubmit]").forEach((select) => {
 document.querySelectorAll("tr[data-href]").forEach((row) => {
   row.addEventListener("click", (event) => {
     if (event.target.closest("a, button, select, input, form")) return;
+    if (window.getSelection()?.toString()) return;   // está seleccionando texto (una IP)
     location.href = row.dataset.href;
   });
 });
@@ -40,37 +141,51 @@ document.querySelectorAll("select[data-ip-mode]").forEach((select) => {
   update();
 });
 
-// --- Portada: acciones rápidas y estado en vivo ---------------------------
+// Botones que copian un texto (las IPs)
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-copy]");
+  if (!button) return;
+  event.preventDefault();
+  const text = button.dataset.copy;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    let copied = false;
+    try { copied = document.execCommand("copy"); } catch (e) { /* sin permiso */ }
+    area.remove();
+    if (!copied) {
+      toast("No se pudo copiar al portapapeles.", true);
+      return;
+    }
+  }
+  toast(`Copiado: ${text}`);
+});
 
-const fmtBytes = (n) => {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
-  return `${i <= 1 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
-};
+// Alta de KVM: solo se enseñan los campos que aplican al origen elegido
+(() => {
+  const form = document.getElementById("new-machine-form");
+  const origin = form?.querySelector("#f-origin");
+  if (!form || form.dataset.kind !== "kvm" || !origin) return;
+  const show = (key, visible) => {
+    const field = form.querySelector(`[data-field="${key}"]`);
+    if (field) field.hidden = !visible;
+  };
+  const update = () => {
+    const kind = origin.value.split(":")[0];
+    show("cloud_init", kind === "image");
+    ["osinfo", "disks", "networks"].forEach((key) => show(key, kind !== "clone"));
+  };
+  origin.addEventListener("change", update);
+  update();
+})();
 
-const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ({
-  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-}[c]));
-
-function toast(text, isError = false) {
-  const box = document.getElementById("toasts");
-  if (!box) return;
-  const item = document.createElement("div");
-  item.className = "toast" + (isError ? " error" : "");
-  item.textContent = text;
-  box.appendChild(item);
-  setTimeout(() => item.remove(), 4500);
-}
-
-function powerButton(m) {
-  const running = m.state === "running";
-  const label = running ? "Parar" : (m.state === "paused" ? "Reanudar" : "Arrancar");
-  return `<button class="btn small power" data-power="${running ? "stop" : "start"}"
-    data-kind="${escapeHtml(m.kind)}" data-id="${escapeHtml(m.id)}"
-    data-name="${escapeHtml(m.name)}" title="${label}"
-    aria-label="${label} ${escapeHtml(m.name)}">${running ? "■" : "▶"}</button>`;
-}
+// --- Estado del host (barra lateral) y portada en vivo -------------------
 
 function setBar(id, pct) {
   const bar = document.getElementById(id);
@@ -86,14 +201,30 @@ function setText(id, text) {
 
 function updateHost(host) {
   if (!host || !host.mem_total) return;
-  setText("host-ram-text", fmtBytes(host.mem_used));
-  setText("host-ram-note", `${host.mem_pct} % en uso · ${fmtBytes(host.mem_available)} disponible`);
+  setText("host-ram-text", `${fmtBytes(host.mem_used)} / ${fmtBytes(host.mem_total)}`);
   setBar("host-ram-bar", host.mem_pct);
-  setText("host-load-text", host.load.toFixed(1));
+  setText("host-load-text", `${host.load.toFixed(1)} / ${host.cpus} núcleos`);
   setBar("host-load-bar", host.load_pct);
-  setText("host-disk-text", fmtBytes(host.disk_used));
-  setText("host-disk-note", `${host.disk_pct} % de ${host.disk_path}`);
+  setText("host-disk-text", `${fmtBytes(host.disk_used)} / ${fmtBytes(host.disk_total)}`);
   setBar("host-disk-bar", host.disk_pct);
+}
+
+const STATE_ES = { running: "Encendida", stopped: "Apagada", paused: "Pausada" };
+
+// Mismo marcado que la macro power_buttons de index.html
+function powerButtons(m) {
+  const running = m.state === "running";
+  const label = running ? "Apagar" : (m.state === "paused" ? "Reanudar" : "Arrancar");
+  const name = escapeHtml(m.name);
+  const base = `/m/${encodeURIComponent(m.kind)}/${encodeURIComponent(m.id)}`;
+  const consoleLink = running
+    ? `<a class="btn small icon-only ghost" href="${base}?console=1" title="Abrir consola"
+         aria-label="Consola de ${name}">${icon("terminal")}</a>`
+    : "";
+  return `${consoleLink}<button class="btn small icon-only power" type="button"
+    data-power="${running ? "stop" : "start"}" data-kind="${escapeHtml(m.kind)}"
+    data-id="${escapeHtml(m.id)}" data-name="${name}" title="${label}"
+    aria-label="${label} ${name}">${icon(running ? "stop" : "play")}</button>`;
 }
 
 let statusBusy = false;
@@ -113,13 +244,16 @@ async function refreshStatus() {
       const m = machines.get(row.dataset.key);
       if (!m) return;
       const dot = row.querySelector(".js-dot");
-      if (dot) { dot.className = `dot ${m.state}`; dot.title = m.state; }
+      if (dot) {
+        dot.className = `dot ${m.state} js-dot`;
+        dot.title = STATE_ES[m.state] || "Estado desconocido";
+      }
       const ips = row.querySelector(".js-ips");
       if (ips) ips.textContent = m.ips.length ? m.ips.join(", ") : "—";
       const cell = row.querySelector(".js-power");
       if (cell && row.dataset.busy !== "1" && cell.dataset.state !== m.state) {
         cell.dataset.state = m.state;
-        cell.innerHTML = powerButton(m);
+        cell.innerHTML = powerButtons(m);
       }
     });
 
@@ -137,6 +271,18 @@ async function refreshStatus() {
   }
 }
 
+async function refreshHost() {
+  if (document.hidden) return;
+  try {
+    const response = await fetch("/api/host", {
+      headers: { Accept: "application/json" }, cache: "no-store",
+    });
+    if (response.ok) updateHost(await response.json());
+  } catch (error) {
+    // se reintenta en la siguiente vuelta
+  }
+}
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-power]");
   if (!button) return;
@@ -144,27 +290,20 @@ document.addEventListener("click", async (event) => {
   const row = button.closest("tr");
   if (row && row.dataset.busy === "1") return;
 
-  // Parar pide un segundo clic, como en la ficha; arrancar es inmediato.
-  if (button.dataset.power === "stop" && button.dataset.armed !== "1") {
-    button.dataset.armed = "1";
-    button.dataset.original = button.textContent;
-    button.textContent = "¿Parar?";
-    button.classList.add("armed");
-    setTimeout(() => {
-      if (!button.isConnected) return;
-      button.dataset.armed = "";
-      button.textContent = button.dataset.original || "■";
-      button.classList.remove("armed");
-    }, 4000);
-    return;
+  const name = button.dataset.name || "";
+  const action = button.dataset.power;
+  // Apagar pide confirmación, como en la ficha; arrancar es inmediato.
+  if (action === "stop") {
+    const confirmed = await askConfirm({
+      title: `Apagar ${name}`,
+      text: "Se le pide al sistema que se apague de forma ordenada.",
+      label: "Apagar", danger: true,
+    });
+    if (!confirmed) return;
   }
 
-  const name = button.dataset.name || "";
   const url = `/m/${encodeURIComponent(button.dataset.kind)}`
-    + `/${encodeURIComponent(button.dataset.id)}/${button.dataset.power}`;
-  const icon = button.dataset.power === "stop" ? "■" : "▶";
-  button.dataset.armed = "";
-  button.classList.remove("armed");
+    + `/${encodeURIComponent(button.dataset.id)}/${action}`;
   button.disabled = true;
   if (row) { row.dataset.busy = "1"; row.classList.add("busy"); }
   try {
@@ -180,19 +319,107 @@ document.addEventListener("click", async (event) => {
     toast(error.message || "No se pudo completar la acción.", true);
   } finally {
     if (row) { row.dataset.busy = ""; row.classList.remove("busy"); }
-    if (button.isConnected) {
-      button.disabled = false;
-      button.textContent = icon;
-    }
+    if (button.isConnected) button.disabled = false;
   }
 });
 
 if (document.querySelector("tr[data-key]")) {
-  setInterval(refreshStatus, 6000);
+  setInterval(refreshStatus, 6000);          // la portada: máquinas y host
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshStatus();
   });
+} else if (document.getElementById("host-ram-bar")) {
+  setInterval(refreshHost, 10000);           // el resto de páginas: solo el host
 }
+
+// Grupos de la portada plegables; se recuerda cuáles están cerrados
+(() => {
+  const groups = document.querySelectorAll(".group[data-group]");
+  if (!groups.length) return;
+  const KEY = "hangar.groups.collapsed";
+  let collapsed = [];
+  try {
+    collapsed = JSON.parse(localStorage.getItem(KEY) || "[]");
+    if (!Array.isArray(collapsed)) collapsed = [];
+  } catch (error) {
+    collapsed = [];
+  }
+  // Con un módulo filtrado no tiene sentido enseñarlo plegado
+  const filtered = new URLSearchParams(location.search).has("module");
+  const apply = (group, closed) => {
+    group.classList.toggle("collapsed", closed);
+    group.querySelector(".group-toggle")?.setAttribute("aria-expanded", String(!closed));
+  };
+  groups.forEach((group) => {
+    const key = group.dataset.group;
+    if (!filtered && collapsed.includes(key)) apply(group, true);
+    group.querySelector(".group-toggle")?.addEventListener("click", () => {
+      const closed = !group.classList.contains("collapsed");
+      apply(group, closed);
+      collapsed = collapsed.filter((item) => item !== key);
+      if (closed) collapsed.push(key);
+      try {
+        localStorage.setItem(KEY, JSON.stringify(collapsed));
+      } catch (error) {
+        // sin almacenamiento local: no se recuerda
+      }
+    });
+  });
+})();
+
+// --- Página de una tarea: registro en vivo -------------------------------
+
+(() => {
+  const box = document.getElementById("job");
+  const log = document.getElementById("log");
+  if (!box || !log) return;
+  log.scrollTop = log.scrollHeight;
+  if (box.dataset.status !== "running") return;
+
+  let failures = 0;
+  const finish = (data) => {
+    document.getElementById("job-running").hidden = true;
+    if (data.status === "done") {
+      if (data.url) document.getElementById("job-link").href = data.url;
+      document.getElementById("job-done").hidden = false;
+    } else {
+      document.getElementById("job-error-text").textContent = data.error || "La tarea falló.";
+      document.getElementById("job-error").hidden = false;
+    }
+  };
+
+  const tick = async () => {
+    let data;
+    try {
+      const response = await fetch(box.dataset.jobUrl, {
+        headers: { Accept: "application/json" }, cache: "no-store",
+      });
+      if (response.status === 404) {
+        finish({ status: "error", error: "Hangar se reinició y ya no recuerda esta tarea. "
+          + "Lo que estuviera creando puede haberse quedado a medias." });
+        return;
+      }
+      if (!response.ok) throw new Error("respuesta no válida");
+      data = await response.json();
+      failures = 0;
+    } catch (error) {
+      failures += 1;
+      if (failures >= 5) {
+        finish({ status: "error", error: "Se perdió la conexión con Hangar." });
+        return;
+      }
+      setTimeout(tick, 2000);
+      return;
+    }
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
+    const text = data.lines.join("\n") || "…";
+    if (log.textContent !== text) log.textContent = text;
+    if (atBottom) log.scrollTop = log.scrollHeight;
+    if (data.status === "running") setTimeout(tick, 1000);
+    else finish(data);
+  };
+  setTimeout(tick, 700);
+})();
 
 // --- Pestaña Rendimiento --------------------------------------------------
 
@@ -340,6 +567,7 @@ function initMetrics() {
 initMetrics();
 
 // --- Cajón de consola de la ficha -----------------------------------------
+// Lo llama machine.html después de cargar xterm.js.
 
 function initConsoleDrawer() {
   const toggle = document.getElementById("console-toggle");
@@ -433,11 +661,18 @@ function initConsoleDrawer() {
     storedHeight = 0;
   }
 
+  // El botón lleva un icono: solo se cambia el texto
+  const setToggleLabel = (text) => {
+    const label = toggle.querySelector("span");
+    if (label) label.textContent = text;
+    else toggle.textContent = text;
+  };
+
   const open = () => {
     drawer.hidden = false;
     document.body.classList.add("console-open");
     toggle.setAttribute("aria-expanded", "true");
-    toggle.textContent = "Ocultar consola";
+    setToggleLabel("Ocultar consola");
     ensureTerminal();
     applyHeight(storedHeight || drawer.getBoundingClientRect().height);
     requestAnimationFrame(() => {
@@ -450,7 +685,7 @@ function initConsoleDrawer() {
     drawer.hidden = true;
     document.body.classList.remove("console-open");
     toggle.setAttribute("aria-expanded", "false");
-    toggle.textContent = "Consola";
+    setToggleLabel("Consola");
   };
 
   toggle.addEventListener("click", () => {
@@ -507,5 +742,3 @@ function initConsoleDrawer() {
 
   if (new URLSearchParams(location.search).get("console") === "1") open();
 }
-
-initConsoleDrawer();

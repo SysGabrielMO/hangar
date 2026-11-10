@@ -4,29 +4,94 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Hangar{% endblock %}</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="{{ static('icon.svg') }}" type="image/svg+xml">
+  {# El tema elegido se aplica antes de pintar, para que no parpadee #}
+  <script>try{var t=localStorage.getItem("hangar.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
+  <script>window.HANGAR_ICONS = "{{ static('icons.svg') }}";</script>
+  <link rel="stylesheet" href="{{ static('style.css') }}">
   {% block head %}{% endblock %}
 </head>
 <body>
-  <header class="topbar">
-    <a href="/" class="brand">
-      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-        <path d="M2 21V10l10-6 10 6v11h-4v-8H6v8z" fill="currentColor"/>
-      </svg>
-      Hangar
-    </a>
-    <nav class="top-nav">
-      <a href="/">Máquinas</a>
-      <a href="/consoles">Consolas</a>
-      <a href="/networks">Redes</a>
-      <a href="/new/kvm" class="btn primary small">+ Nueva máquina</a>
+{% set path = request.url.path %}
+{% set active_module = request.query_params.get("module", "") if path == "/" else "" %}
+{% set side_host = host_stats() %}
+<div class="app">
+  <aside class="sidebar">
+    <a href="/" class="brand"><span class="brand-mark">{{ icon("logo") }}</span>Hangar</a>
+    <a href="/new/kvm" class="btn primary side-new">{{ icon("plus") }} Nueva máquina</a>
+
+    <nav class="nav" aria-label="Principal">
+      <a href="/" class="nav-item {{ 'active' if (path == '/' and not active_module) or path.startswith('/m/') }}">
+        {{ icon("server") }} Máquinas
+        {% if total is defined %}<span class="count" data-stat="total">{{ total }}</span>{% endif %}
+      </a>
+      <a href="/consoles" class="nav-item">{{ icon("terminal") }} Consolas</a>
+      <a href="/networks" class="nav-item {{ 'active' if path.startswith('/networks') }}">{{ icon("network") }} Redes</a>
     </nav>
-  </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
-  <div id="toasts" class="toasts" aria-live="polite"></div>
-  <script src="/static/app.js"></script>
+
+    <div class="nav-title">Módulos</div>
+    <nav class="nav modules" aria-label="Módulos">
+      {% for key, label in modules.items() %}
+      <a href="/?module={{ key | urlencode }}" title="{{ label }}"
+         class="nav-item mod-{{ loop.index }} {{ 'active' if active_module == key }}">
+        <span class="mod-dot"></span><span class="mod-name">{{ key }}</span>
+        {% if module_counts is defined %}<span class="count">{{ module_counts[key] }}</span>{% endif %}
+      </a>
+      {% endfor %}
+      <a href="/?module={{ no_module }}" class="nav-item mod-0 {{ 'active' if active_module == no_module }}">
+        <span class="mod-dot"></span><span class="mod-name">Sin módulo</span>
+        {% if module_counts is defined %}<span class="count">{{ module_counts[""] }}</span>{% endif %}
+      </a>
+    </nav>
+
+    <div class="side-foot">
+      {% if side_host.mem_total %}
+      <div class="side-meter" title="Memoria en uso del host">
+        <div class="side-meter-row"><span>RAM</span>
+          <strong id="host-ram-text">{{ side_host.mem_used | human }} / {{ side_host.mem_total | human }}</strong></div>
+        <div class="meter"><span id="host-ram-bar" class="{{ 'hot' if side_host.mem_pct >= 90 }}" style="width: {{ side_host.mem_pct }}%"></span></div>
+      </div>
+      <div class="side-meter" title="Carga media del último minuto frente a los núcleos del host">
+        <div class="side-meter-row"><span>CPU</span>
+          <strong id="host-load-text">{{ "%.1f" | format(side_host.load) }} / {{ side_host.cpus }} núcleos</strong></div>
+        <div class="meter"><span id="host-load-bar" class="{{ 'hot' if side_host.load_pct >= 90 }}" style="width: {{ side_host.load_pct }}%"></span></div>
+      </div>
+      <div class="side-meter" title="Disco de {{ side_host.disk_path }} (imágenes de VM, LXC y Docker)">
+        <div class="side-meter-row"><span>Disco</span>
+          <strong id="host-disk-text">{{ side_host.disk_used | human }} / {{ side_host.disk_total | human }}</strong></div>
+        <div class="meter"><span id="host-disk-bar" class="{{ 'hot' if side_host.disk_pct >= 90 }}" style="width: {{ side_host.disk_pct }}%"></span></div>
+      </div>
+      {% endif %}
+      <div class="side-bottom">
+        <span>Este equipo</span>
+        <button class="theme-toggle" id="theme-toggle" type="button" title="Cambiar entre tema claro y oscuro" aria-label="Cambiar tema">
+          {{ icon("moon", "icon-moon") }}{{ icon("sun", "icon-sun") }}
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="content">
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+<dialog class="modal" id="confirm-dialog" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <div class="modal-body">
+      <h3 id="confirm-title">¿Seguro?</h3>
+      <p id="confirm-text"></p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" value="cancel" id="confirm-cancel">Cancelar</button>
+      <button class="btn primary" value="ok" id="confirm-ok">Confirmar</button>
+    </div>
+  </form>
+</dialog>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="{{ static('app.js') }}"></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>
