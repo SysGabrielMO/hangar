@@ -101,8 +101,11 @@ class DockerDriver(Driver):
     def list(self) -> list[Machine]:
         client = self._client()
         try:
-            return sorted((self._summary(c) for c in client.containers.list(all=True)),
-                          key=lambda m: m.name)
+            # ignore_removed: un contenedor que se borra justo ahora no tumba la lista
+            containers = client.containers.list(all=True, ignore_removed=True)
+            return sorted((self._summary(c) for c in containers), key=lambda m: m.name)
+        except DockerException as e:
+            raise DriverError(f"Docker no responde: {getattr(e, 'explanation', None) or e}") from e
         finally:
             client.close()
 
@@ -286,7 +289,7 @@ class DockerDriver(Driver):
     def prepare_create(self, values: dict[str, str]) -> dict:
         client = self._client()
         try:
-            existing = [c.name for c in client.containers.list(all=True)]
+            existing = [c.name for c in client.containers.list(all=True, ignore_removed=True)]
             networks = [n.name for n in client.networks.list()]
         finally:
             client.close()

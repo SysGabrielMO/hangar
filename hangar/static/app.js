@@ -52,6 +52,7 @@ function askConfirm({ title, text, label, danger }) {
   if (!dialog || typeof dialog.showModal !== "function") {
     return Promise.resolve(window.confirm(`${title}\n\n${text || ""}`));
   }
+  if (dialog.open) return Promise.resolve(false);
   const ok = document.getElementById("confirm-ok");
   document.getElementById("confirm-title").textContent = title || "¿Seguro?";
   const body = document.getElementById("confirm-text");
@@ -118,6 +119,32 @@ window.addEventListener("pageshow", () => {
 });
 
 // --- Pequeñas ayudas ------------------------------------------------------
+
+// El mensaje de la última acción viaja en la URL (?msg=…). Una vez pintado se
+// quita, para que al recargar o volver atrás no reaparezca un «Apagando…» viejo.
+(() => {
+  const url = new URL(location.href);
+  if (!url.searchParams.has("msg") && !url.searchParams.has("error")) return;
+  url.searchParams.delete("msg");
+  url.searchParams.delete("error");
+  history.replaceState(null, "", url.pathname + url.search + url.hash);
+})();
+
+// Los enlaces de navegación responden al pulsar el botón del ratón, sin esperar
+// a soltarlo: son unos 100 ms menos en cada cambio de página.
+document.addEventListener("mousedown", (event) => {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const link = event.target.closest("a[href]");
+  if (!link || link.target || link.hasAttribute("download") || link.origin !== location.origin) return;
+  if (!link.closest(".sidebar, .tabs, .seg, .crumbs, .m-name, .members, .kind-tabs")) return;
+  if (link.pathname === location.pathname && link.search === location.search) return;
+  event.preventDefault();
+  location.href = link.href;
+});
+
+function showNotices(notices) {
+  (notices || []).forEach((text) => toast(text, true));
+}
 
 // Selects que guardan al cambiar (p. ej. el módulo)
 document.querySelectorAll("select[data-autosubmit]").forEach((select) => {
@@ -264,6 +291,7 @@ async function refreshStatus() {
       else if (key.startsWith("kind-")) el.textContent = data.counts[key.slice(5)] ?? 0;
     });
     updateHost(data.host);
+    showNotices(data.notices);
   } catch (error) {
     // Un fallo puntual no molesta: el siguiente intento lo corrige.
   } finally {
@@ -313,8 +341,8 @@ document.addEventListener("click", async (event) => {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || "No se pudo completar la acción.");
     toast(`${data.msg || "Hecho"}${name ? ` · ${name}` : ""}`);
-    setTimeout(refreshStatus, 900);
-    setTimeout(refreshStatus, 3500);
+    // Arrancar o apagar tarda unos segundos: se mira más a menudo un rato
+    [700, 2000, 4000, 8000, 12000, 20000, 30000].forEach((ms) => setTimeout(refreshStatus, ms));
   } catch (error) {
     toast(error.message || "No se pudo completar la acción.", true);
   } finally {
@@ -324,6 +352,7 @@ document.addEventListener("click", async (event) => {
 });
 
 if (document.querySelector("tr[data-key]")) {
+  setTimeout(refreshStatus, 1200);           // la página puede salir de una lista de hace segundos
   setInterval(refreshStatus, 6000);          // la portada: máquinas y host
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshStatus();
@@ -331,6 +360,60 @@ if (document.querySelector("tr[data-key]")) {
 } else if (document.getElementById("host-ram-bar")) {
   setInterval(refreshHost, 10000);           // el resto de páginas: solo el host
 }
+
+// Ficha de una máquina: si su estado cambia (termina de apagarse, la arrancan
+// desde otro sitio…) la página se recarga sola para enseñar los botones buenos.
+(() => {
+  const head = document.getElementById("machine-head");
+  if (!head) return;
+  let dirty = false;            // el usuario está escribiendo en algún formulario
+  document.addEventListener("input", (event) => {
+    if (!event.target.closest("[data-autosubmit]")) dirty = true;
+  });
+  let stopped = false;
+  let changes = 0;
+
+  const check = async () => {
+    if (document.hidden || stopped) return;
+    let data;
+    try {
+      const response = await fetch(head.dataset.stateUrl, {
+        headers: { Accept: "application/json" }, cache: "no-store",
+      });
+      if (!response.ok) return;
+      data = await response.json();
+    } catch (error) {
+      return;                   // Hangar no contesta: se reintenta en la siguiente vuelta
+    }
+    showNotices(data.notices);
+    if (data.state === head.dataset.state) {
+      changes = 0;
+      return;
+    }
+    // Dos lecturas seguidas distintas: una sola podría venir de una lista de hace segundos
+    changes += 1;
+    if (changes < 2) return;
+    stopped = true;
+    if (data.state === "gone") {
+      location.href = "/";      // la han borrado
+      return;
+    }
+    const dialogOpen = document.getElementById("confirm-dialog")?.open;
+    if (dirty || dialogOpen) {
+      const notice = document.getElementById("state-changed");
+      if (notice) notice.hidden = false;
+      return;
+    }
+    // Si la consola estaba abierta y la máquina sigue encendida, se reabre
+    const url = new URL(location.href);
+    const drawerOpen = document.body.classList.contains("console-open");
+    if (drawerOpen && data.state === "running") url.searchParams.set("console", "1");
+    else url.searchParams.delete("console");
+    location.replace(url.pathname + url.search);
+  };
+  setInterval(check, 3000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
+})();
 
 // Grupos de la portada plegables; se recuerda cuáles están cerrados
 (() => {

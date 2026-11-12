@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import threading
+from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import datetime
 from urllib.parse import quote, urlencode
@@ -14,12 +16,28 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import console, db, jobs, metrics, modules, networks
 from .common import (ACCESS_TOKEN, BASE, NO_MODULE, SETTINGS_SECTIONS, TOKEN_COOKIE, back,
-                     driver_or_404, host_allowed, host_stats, list_all, machine_name, safe_next,
-                     same_origin, templates, token_ok)
+                     driver_or_404, find_machine, host_allowed, host_stats, invalidate_list,
+                     list_all, machine_name, pop_notices, push_notice, safe_next, same_origin,
+                     templates, token_ok)
 from .drivers import DRIVERS, DriverError
 from .drivers.base import SNAPSHOT_NAME_RE
 
-app = FastAPI(title="Hangar")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Al arrancar, deja preparado por detrás lo que tarda la primera vez, para
+    que la portada y el formulario de alta salgan al instante."""
+    def warm():
+        for task in (list_all, DRIVERS["kvm"]._osinfo_ids):
+            try:
+                task()
+            except Exception:           # noqa: BLE001 - solo es un calentamiento
+                pass
+
+    threading.Thread(target=warm, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Hangar", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 app.include_router(console.router)
 app.include_router(networks.router)
@@ -58,7 +76,18 @@ async def local_only(request: Request, call_next):
         if not same_origin(request.headers.get("origin"), host) or \
                 fetch_site not in ("same-origin", "none"):
             return PlainTextResponse("Petición de otro origen rechazada", status_code=403)
-    return await call_next(request)
+        invalidate_list()             # va a cambiar algo: nada de listas guardadas
+        try:
+            return await call_next(request)
+        finally:
+            invalidate_list()         # y la respuesta (o su redirección) verá el estado nuevo
+    response = await call_next(request)
+    if request.url.path.startswith("/static/") and "v" in request.query_params \
+            and response.status_code == 200:
+        # La URL lleva la fecha del fichero (static_url): si cambia, cambia la URL,
+        # así que el navegador puede guardarlo y no volver a pedirlo en cada página
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -68,6 +97,29 @@ async def html_errors(request: Request, exc: StarletteHTTPException):
     return templates.TemplateResponse(request, "error.html", {
         "status": exc.status_code, "detail": exc.detail,
     }, status_code=exc.status_code)
+
+
+def _error_response(request: Request, status: int, detail: str):
+    wants_json = request.url.path.startswith("/api/") or \
+        "application/json" in request.headers.get("accept", "")
+    if wants_json:
+        return JSONResponse({"detail": detail}, status_code=status)
+    return templates.TemplateResponse(request, "error.html", {
+        "status": status, "detail": detail}, status_code=status)
+
+
+@app.exception_handler(DriverError)
+async def driver_errors(request: Request, exc: DriverError):
+    """Un error del hipervisor que ninguna ruta recogió: se explica, no un 500 en blanco."""
+    return _error_response(request, 502, str(exc))
+
+
+@app.exception_handler(Exception)
+async def unexpected_errors(request: Request, exc: Exception):
+    # libvirt y Docker lanzan sus propios errores si algo cambia a mitad de una
+    # consulta (una máquina que se borra, el servicio que se reinicia…)
+    return _error_response(request, 500, f"Algo ha fallado al hablar con el sistema: {exc}. "
+                           "Vuelve a intentarlo; si se repite, mira la terminal de Hangar.")
 
 
 POWER_MESSAGES = {"start": "Arrancando…", "stop": "Apagando…",
@@ -455,6 +507,47 @@ async def delete(request: Request, kind: str, machine_id: str):
     return RedirectResponse(f"/?msg={quote(' '.join(notes))}", status_code=303)
 
 
+POWER_WAIT = 1.0      # segundos que se espera una acción antes de dejarla en segundo plano
+POWER_LABELS = {"start": "arrancar", "stop": "apagar", "kill": "forzar el apagado de",
+                "restart": "reiniciar"}
+
+
+def run_power(driver, action: str, machine_id: str) -> None:
+    """Ejecuta la acción sin tener al usuario esperando.
+
+    Apagar un contenedor puede tardar 10 s (Docker) o un minuto (LXC). Se
+    espera un momento por si falla enseguida (ese error se muestra al
+    instante); si sigue en marcha, continúa en segundo plano y, si acaba
+    mal, deja un aviso que la interfaz recoge en su siguiente refresco."""
+    lock = threading.Lock()
+    state = {"done": False, "detached": False, "error": None}
+
+    def work():
+        error = None
+        try:
+            getattr(driver, action)(machine_id)
+        except DriverError as e:
+            error = str(e)
+        except Exception as e:  # noqa: BLE001 - que no muera el hilo en silencio
+            error = f"Error inesperado: {e!r}"
+        invalidate_list()
+        with lock:
+            state["done"], state["error"] = True, error
+            if error and state["detached"]:
+                push_notice(f"No se pudo {POWER_LABELS[action]} "
+                            f"{machine_name(driver, machine_id)}: {error}")
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    thread.join(POWER_WAIT)
+    with lock:
+        if not state["done"]:
+            state["detached"] = True
+            return
+        if state["error"]:
+            raise DriverError(state["error"])
+
+
 @app.post("/m/{kind}/{machine_id}/{action}")
 def power(request: Request, kind: str, machine_id: str, action: str):
     driver = driver_or_404(kind)
@@ -463,7 +556,7 @@ def power(request: Request, kind: str, machine_id: str, action: str):
     # La portada usa fetch() y espera JSON; la ficha sigue con el redirect de siempre.
     wants_json = "application/json" in request.headers.get("accept", "")
     try:
-        getattr(driver, action)(machine_id)
+        run_power(driver, action, machine_id)
     except DriverError as e:
         if wants_json:
             return JSONResponse({"detail": str(e)}, status_code=400)
@@ -487,7 +580,18 @@ def api_status():
         "counts": {k: sum(m.kind == k for m in machines) for k in DRIVERS},
         "host": host_stats(),
         "errors": errors,
+        "notices": pop_notices(),
     }
+
+
+@app.get("/api/state/{kind}/{machine_id}")
+def api_state(kind: str, machine_id: str):
+    """Estado de una máquina, para que su ficha se actualice sola. Sale de la
+    lista guardada, así que sondearlo cada pocos segundos no cuesta nada."""
+    driver_or_404(kind)
+    machine = find_machine(kind, machine_id)
+    return {"state": machine.state if machine else "gone",
+            "ips": machine.ips if machine else [], "notices": pop_notices()}
 
 
 @app.get("/api/host")

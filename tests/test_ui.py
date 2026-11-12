@@ -166,3 +166,150 @@ def test_docker_usage_excludes_file_cache(monkeypatch):
     usage = driver.usage("x")
     assert usage.mem_used == 2000
     assert usage.cpu_time == 2.0
+
+
+# --- Rendimiento y robustez ---------------------------------------------------
+
+class CountingDriver:
+    kind = "fake"
+    label = "Fake"
+
+    def __init__(self):
+        self.calls = 0
+
+    def list(self):
+        self.calls += 1
+        return [Machine(kind="fake", id="vm-1", name="vm-1", state="running")]
+
+
+@pytest.fixture
+def counting(monkeypatch):
+    driver = CountingDriver()
+    monkeypatch.setattr(common, "DRIVERS", {"fake": driver})
+    for name in ("all_last_ips", "all_iface_ips"):
+        monkeypatch.setattr(db, name, lambda: {})
+    monkeypatch.setattr(db, "save_last_ips", lambda *args: None)
+    return driver
+
+
+def test_list_all_is_cached_and_invalidated(counting):
+    common.list_all()
+    common.list_all()
+    assert counting.calls == 1                     # la segunda sale de la caché
+    common.invalidate_list()
+    assert common.list_all()[0][0].name == "vm-1"
+    assert counting.calls == 2                     # tras un cambio se vuelve a preguntar
+
+
+def test_list_all_serves_stale_while_refreshing(counting, monkeypatch):
+    common.list_all()
+    monkeypatch.setattr(common, "LIST_TTL", 0)     # la lista guardada ya «ha caducado»
+    machines, _ = common.list_all()                # responde al momento con la anterior…
+    assert machines[0].name == "vm-1"
+    for _ in range(200):                           # …y refresca por detrás
+        if counting.calls >= 2:
+            break
+        time.sleep(0.01)
+    assert counting.calls >= 2
+
+
+def test_list_survives_a_driver_that_blows_up(monkeypatch):
+    class Broken:
+        kind, label = "roto", "Roto"
+
+        def list(self):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(common, "DRIVERS", {"roto": Broken()})
+    for name in ("all_last_ips", "all_iface_ips"):
+        monkeypatch.setattr(db, name, lambda: {})
+    machines, errors = common.list_all()
+    assert machines == [] and "boom" in errors["roto"]
+
+
+def test_post_invalidates_the_list(client, counting, monkeypatch):
+    monkeypatch.setattr(db, "set_module", lambda *args: None)
+    common.list_all()
+    client.post("/m/fake/vm-1/module", data={"module": ""}, follow_redirects=False)
+    common.list_all()
+    assert counting.calls == 2
+
+
+def test_slow_power_action_returns_at_once_and_reports_failure(monkeypatch):
+    class Slow:
+        kind, label = "fake", "Fake"
+
+        def stop(self, machine_id):
+            time.sleep(0.3)
+            raise DriverError("no quiso apagarse")
+
+        def get(self, machine_id):
+            return Machine(kind="fake", id=machine_id, name="lenta", state="running")
+
+    monkeypatch.setattr(main, "POWER_WAIT", 0.05)
+    started = time.monotonic()
+    main.run_power(Slow(), "stop", "vm-1")          # no espera a que termine
+    assert time.monotonic() - started < 0.25
+    for _ in range(100):
+        notices = common.pop_notices()
+        if notices:
+            break
+        time.sleep(0.02)
+    assert notices and "no quiso apagarse" in notices[0] and "lenta" in notices[0]
+
+
+def test_fast_power_failure_is_reported_immediately():
+    class Failing:
+        kind, label = "fake", "Fake"
+
+        def start(self, machine_id):
+            raise DriverError("ya está encendida")
+
+    with pytest.raises(DriverError, match="ya está encendida"):
+        main.run_power(Failing(), "start", "vm-1")
+    assert common.pop_notices() == []
+
+
+def test_api_state(client, monkeypatch, fake):
+    machines = [Machine(kind="fake", id="vm-1", name="x", state="running", ips=["10.0.0.9"])]
+    monkeypatch.setattr(main, "find_machine",
+                        lambda kind, mid: next((m for m in machines if m.id == mid), None))
+    assert client.get("/api/state/fake/vm-1").json()["state"] == "running"
+    assert client.get("/api/state/fake/borrada").json()["state"] == "gone"
+
+
+def test_versioned_static_files_are_cacheable(client):
+    assert "immutable" in client.get("/static/app.js?v=1").headers["cache-control"]
+    assert "immutable" not in client.get("/static/app.js").headers.get("cache-control", "")
+
+
+def test_unexpected_error_shows_a_page_not_a_blank_500(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    def boom():
+        raise RuntimeError("libvirt se ha caído")
+
+    monkeypatch.setattr(main, "list_all", boom)
+    quiet = TestClient(main.app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    response = quiet.get("/")
+    assert response.status_code == 500
+    assert "libvirt se ha caído" in response.text and "Hangar" in response.text
+    assert quiet.get("/api/status").json()["detail"].startswith("Algo ha fallado")
+
+
+@pytest.mark.parametrize("url", ["/\\\\evil.example", "/\\tevil", "//evil.example", "http://evil"])
+def test_safe_next_rejects_tricky_urls(url):
+    assert common.safe_next(url) == "/"
+
+
+def test_token_check_tolerates_non_ascii(monkeypatch):
+    monkeypatch.setattr(common, "ACCESS_TOKEN", "secreto")
+    assert not common.token_ok("ñandú")           # antes: TypeError → error 500
+    assert common.token_ok("secreto")
+
+
+def test_db_recreates_tables_if_file_is_deleted(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "hangar.db")
+    db.save_iface_ip("kvm", "vm-1", "mac", "10.0.0.5")
+    (tmp_path / "hangar.db").unlink()
+    assert db.get_iface_ips("kvm", "vm-1") == {}   # antes: «no such table»

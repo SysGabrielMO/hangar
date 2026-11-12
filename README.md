@@ -150,6 +150,20 @@ El estado, las IPs y las cifras del host se refrescan solos cada 6 segundos.
 Solo se suma la RAM con límite configurado: un contenedor Docker o LXC sin
 límite no reserva una cantidad concreta y no entra en la cuenta.
 
+## Por qué responde rápido
+
+- La lista de máquinas se guarda un par de segundos y se comparte entre la
+  portada, su refresco, las consolas, las redes y las fichas. Cualquier cambio
+  hecho desde Hangar la invalida al momento; si es algo más vieja, la página
+  sale con ella y se refresca por detrás.
+- Arrancar, apagar o reiniciar no deja la página esperando: si la acción tarda
+  (apagar un contenedor son 10 s o más) sigue en segundo plano, y la portada y
+  la ficha se actualizan solas cuando termina. Si acaba mal, sale un aviso.
+- Las consultas a LXC (que pasan por `sudo`) se agrupan y se reutilizan, y la
+  página Redes pregunta una vez por tecnología en lugar de una por máquina.
+- CSS, JavaScript e iconos llevan su versión en la URL y el navegador no los
+  vuelve a pedir.
+
 ## Seguridad
 
 Hangar controla el host con permisos equivalentes a root (grupos `libvirt`

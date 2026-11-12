@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -69,16 +71,38 @@ class Meta:
         return [t.strip() for t in self.tags.split(",") if t.strip()]
 
 
+_ready: set[Path] = set()         # bases de datos con el esquema ya comprobado
+_ready_lock = threading.Lock()
+
+
 def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    path = DB_PATH
+    path.parent.mkdir(exist_ok=True)
+    existed = path.exists()           # si alguien borró el fichero, hay que recrear las tablas
+    conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA)
-    columns = {r["name"] for r in conn.execute("PRAGMA table_info(meta)")}
-    for column, sql in MIGRATIONS.items():
-        if column not in columns:
-            conn.execute(sql)
+    if path not in _ready or not existed:
+        # Crear tablas y migrar una vez por base de datos, no en cada consulta
+        with _ready_lock:
+            conn.executescript(SCHEMA)
+            columns = {r["name"] for r in conn.execute("PRAGMA table_info(meta)")}
+            for column, sql in MIGRATIONS.items():
+                if column not in columns:
+                    conn.execute(sql)
+            conn.commit()
+            _ready.add(path)
     return conn
+
+
+@contextmanager
+def _db():
+    """Conexión que confirma al salir bien, deshace si hay error y se cierra siempre."""
+    conn = _connect()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _meta(r: sqlite3.Row) -> Meta:
@@ -86,26 +110,26 @@ def _meta(r: sqlite3.Row) -> Meta:
 
 
 def all_meta() -> dict[tuple[str, str], Meta]:
-    with _connect() as conn:
+    with _db() as conn:
         rows = conn.execute("SELECT * FROM meta").fetchall()
     return {(r["kind"], r["id"]): _meta(r) for r in rows}
 
 
 def get_meta(kind: str, machine_id: str) -> Meta:
-    with _connect() as conn:
+    with _db() as conn:
         r = conn.execute("SELECT * FROM meta WHERE kind = ? AND id = ?",
                          (kind, machine_id)).fetchone()
     return _meta(r) if r else Meta()
 
 
 def delete_meta(kind: str, machine_id: str) -> None:
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute("DELETE FROM meta WHERE kind = ? AND id = ?", (kind, machine_id))
 
 
 def get_iface_ips(kind: str, machine_id: str) -> dict[str, str]:
     """IPs configuradas a mano o por Hangar, indexadas por MAC/índice."""
-    with _connect() as conn:
+    with _db() as conn:
         rows = conn.execute(
             "SELECT iface, ip FROM iface_ip WHERE kind = ? AND id = ?",
             (kind, machine_id)).fetchall()
@@ -114,7 +138,7 @@ def get_iface_ips(kind: str, machine_id: str) -> dict[str, str]:
 
 def save_iface_ip(kind: str, machine_id: str, iface: str, ip: str) -> None:
     ip = ip.strip()
-    with _connect() as conn:
+    with _db() as conn:
         if ip:
             conn.execute(
                 """INSERT INTO iface_ip (kind, id, iface, ip, updated_at)
@@ -129,9 +153,19 @@ def save_iface_ip(kind: str, machine_id: str, iface: str, ip: str) -> None:
                          (kind, machine_id, iface))
 
 
+def all_iface_ips_by_key() -> dict[tuple[str, str], dict[str, str]]:
+    """Como get_iface_ips, pero de todas las máquinas en una sola consulta."""
+    with _db() as conn:
+        rows = conn.execute("SELECT kind, id, iface, ip FROM iface_ip WHERE ip != ''").fetchall()
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for row in rows:
+        result.setdefault((row["kind"], row["id"]), {})[row["iface"]] = row["ip"]
+    return result
+
+
 def all_iface_ips() -> dict[tuple[str, str], list[str]]:
     """IPs anotadas o configuradas por máquina (para la portada y la API)."""
-    with _connect() as conn:
+    with _db() as conn:
         rows = conn.execute(
             "SELECT kind, id, ip FROM iface_ip WHERE ip != '' ORDER BY updated_at DESC"
         ).fetchall()
@@ -143,7 +177,7 @@ def all_iface_ips() -> dict[tuple[str, str], list[str]]:
 
 def all_last_ips() -> dict[tuple[str, str], list[str]]:
     """Última IP vista por Hangar para cada máquina."""
-    with _connect() as conn:
+    with _db() as conn:
         rows = conn.execute("SELECT kind, id, ips FROM last_ip").fetchall()
     result = {}
     for row in rows:
@@ -158,7 +192,7 @@ def all_last_ips() -> dict[tuple[str, str], list[str]]:
 
 def save_last_ips(kind: str, machine_id: str, ips: list[str]) -> None:
     now = datetime.now().isoformat(timespec="seconds")
-    with _connect() as conn:
+    with _db() as conn:
         if not ips:
             conn.execute("DELETE FROM last_ip WHERE kind = ? AND id = ?", (kind, machine_id))
             return
@@ -171,7 +205,7 @@ def save_last_ips(kind: str, machine_id: str, ips: list[str]) -> None:
 
 
 def delete_iface_ips(kind: str, machine_id: str) -> None:
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute("DELETE FROM iface_ip WHERE kind = ? AND id = ?", (kind, machine_id))
         conn.execute("DELETE FROM last_ip WHERE kind = ? AND id = ?", (kind, machine_id))
 
@@ -180,7 +214,7 @@ def save_meta(kind: str, machine_id: str, description: str, notes: str, tags: st
               module: str = "") -> None:
     now = datetime.now().isoformat(timespec="seconds")
     module = module if module in MODULES else ""
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             """INSERT INTO meta (kind, id, description, notes, tags, module, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -196,7 +230,7 @@ def set_module(kind: str, machine_id: str, module: str) -> None:
     """Cambia solo el módulo (desde la portada), sin tocar el resto."""
     module = module if module in MODULES else ""
     now = datetime.now().isoformat(timespec="seconds")
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             """INSERT INTO meta (kind, id, module, updated_at) VALUES (?, ?, ?, ?)
                ON CONFLICT (kind, id) DO UPDATE SET module = excluded.module""",

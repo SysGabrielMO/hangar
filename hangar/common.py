@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -112,7 +114,8 @@ TOKEN_COOKIE = "hangar_token"
 
 
 def token_ok(value: str | None) -> bool:
-    return not ACCESS_TOKEN or secrets.compare_digest(value or "", ACCESS_TOKEN)
+    return not ACCESS_TOKEN or secrets.compare_digest((value or "").encode(),
+                                                      ACCESS_TOKEN.encode())
 
 
 def host_allowed(host: str) -> bool:
@@ -130,13 +133,15 @@ def driver_or_404(kind: str) -> Driver:
     return DRIVERS[kind]
 
 
-def list_all():
+def _list_all_now():
     """Pide la lista a los tres drivers en paralelo; un fallo no tumba a los demás."""
     def safe(d: Driver):
         try:
             return d.list(), None
         except DriverError as e:
             return [], str(e)
+        except Exception as e:      # un fallo inesperado de un driver no rompe la portada
+            return [], f"Error inesperado: {e!r}"
 
     with ThreadPoolExecutor() as pool:
         results = dict(zip(DRIVERS, pool.map(safe, DRIVERS.values())))
@@ -159,6 +164,109 @@ def list_all():
     return machines, errors
 
 
+# --- Caché de la lista de máquinas ------------------------------------------
+# Listar cuesta (LXC pasa por sudo) y lo piden la portada, su refresco, las
+# consolas, las redes y cada ficha abierta. Se guarda un par de segundos y se
+# tira en cuanto Hangar cambia algo (cualquier POST o una tarea que termina).
+LIST_TTL = 2.0          # segundos que la lista se da por buena
+LIST_STALE = 12.0       # hasta aquí se sirve la anterior mientras se refresca por detrás
+_list_state_lock = threading.Lock()
+_list_refresh_lock = threading.Lock()
+_list_cache: dict = {"at": 0.0, "data": None, "generation": 0, "stale_ok": False}
+
+
+def invalidate_list() -> None:
+    """Olvida la lista guardada: la próxima petición vuelve a preguntar."""
+    with _list_state_lock:
+        _list_cache["generation"] += 1
+        _list_cache["at"] = 0.0
+        _list_cache["stale_ok"] = False
+
+
+def _cached_list(max_age: float, stale: bool = False):
+    with _list_state_lock:
+        data = _list_cache["data"]
+        if data is None or (stale and not _list_cache["stale_ok"]):
+            return None
+        if time.monotonic() - _list_cache["at"] >= max_age:
+            return None
+        return list(data[0]), dict(data[1])
+
+
+def _refresh_list():
+    """Vuelve a listar y guarda el resultado. Con _list_refresh_lock cogido."""
+    with _list_state_lock:
+        generation = _list_cache["generation"]
+    data = _list_all_now()
+    with _list_state_lock:
+        # Si algo cambió mientras se listaba, esto ya puede ser viejo: no se guarda
+        if generation == _list_cache["generation"]:
+            _list_cache.update(at=time.monotonic(), data=data, stale_ok=True)
+    return data
+
+
+def _refresh_list_in_background() -> None:
+    if not _list_refresh_lock.acquire(blocking=False):
+        return                               # ya hay un refresco en marcha
+
+    def work():
+        try:
+            _refresh_list()
+        except Exception:                    # noqa: BLE001 - el siguiente intento lo reintenta
+            pass
+        finally:
+            _list_refresh_lock.release()
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def list_all():
+    """Todas las máquinas y los errores por driver: (máquinas, {tipo: error}).
+
+    Si la lista guardada tiene menos de LIST_TTL se devuelve tal cual. Si es algo
+    más vieja (y Hangar no ha cambiado nada desde entonces) se devuelve también,
+    pero se refresca por detrás: la página sale al instante y el siguiente
+    refresco de la interfaz ya trae lo último."""
+    cached = _cached_list(LIST_TTL)
+    if cached:
+        return cached
+    cached = _cached_list(LIST_STALE, stale=True)
+    if cached:
+        _refresh_list_in_background()
+        return cached
+    with _list_refresh_lock:
+        cached = _cached_list(LIST_TTL)      # la refrescó el hilo al que esperábamos
+        if cached:
+            return cached
+        data = _refresh_list()
+    return list(data[0]), dict(data[1])
+
+
+def find_machine(kind: str, machine_id: str):
+    """La máquina en la lista (con caché), o None. Barato: para sondeos frecuentes."""
+    machines, _ = list_all()
+    return next((m for m in machines if m.kind == kind and m.id == machine_id), None)
+
+
+# Avisos de acciones que terminaron mal en segundo plano (p. ej. un apagado
+# que tardó y al final falló). El siguiente sondeo de la interfaz los recoge.
+_notices: list[str] = []
+_notices_lock = threading.Lock()
+
+
+def push_notice(text: str) -> None:
+    with _notices_lock:
+        _notices.append(text)
+        del _notices[:-20]
+
+
+def pop_notices() -> list[str]:
+    with _notices_lock:
+        notices = list(_notices)
+        _notices.clear()
+    return notices
+
+
 # Modificar, Configuración y Borrar son secciones de la pestaña «Ajustes»
 SETTINGS_SECTIONS = ("edit", "config", "delete")
 
@@ -178,7 +286,10 @@ def back(kind: str, machine_id: str, tab: str = "info", msg: str = "", error: st
 
 def safe_next(url: str, default: str = "/") -> str:
     """Solo redirige a rutas de Hangar (evita redirecciones abiertas)."""
-    return url if url.startswith("/") and not url.startswith("//") else default
+    if not url.startswith("/") or url.startswith("//") or "\\" in url \
+            or any(ord(c) < 32 for c in url):
+        return default
+    return url
 
 
 def machine_name(driver: Driver, machine_id: str) -> str:

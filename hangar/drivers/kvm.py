@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import functools
 import ipaddress
 import io
@@ -303,13 +304,27 @@ class KvmDriver(Driver):
         conn = self._conn()
         try:
             reserved = self._reservation_map(conn)
-            machines = []
-            for dom in conn.listAllDomains():
-                machine = self._summary(dom)
+
+            def one(dom) -> Machine | None:
+                try:
+                    machine = self._summary(dom)
+                except libvirt.libvirtError:
+                    return None         # la han borrado mientras se listaba
                 if not machine.ips:
                     machine.ips = self._reserved_ips(dom, reserved)
-                machines.append(machine)
-            return sorted(machines, key=lambda m: m.name)
+                return machine
+
+            domains = conn.listAllDomains()
+            if sum(1 for dom in domains if dom.isActive()) > 1:
+                # Preguntar la IP a cada VM encendida (agente, DHCP, ARP) es lo lento, y
+                # una que no conteste retrasaría a todas: en paralelo solo cuenta la peor
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    machines = list(pool.map(one, domains))
+            else:
+                machines = [one(dom) for dom in domains]
+            return sorted((m for m in machines if m is not None), key=lambda m: m.name)
+        except libvirt.libvirtError as e:
+            raise DriverError(f"libvirt no responde: {e}") from e
         finally:
             conn.close()
 
@@ -371,46 +386,51 @@ class KvmDriver(Driver):
     def get(self, machine_id: str) -> Machine:
         conn = self._conn()
         try:
-            dom = self._domain(conn, machine_id)
-            m = self._summary(dom)
-            xml = dom.XMLDesc()
-            m.raw_config, m.raw_label = xml, "XML de libvirt"
-            root = ET.fromstring(xml)
-
-            os_type = root.find("os/type")
-            cpu = root.find("cpu")
-            m.sections["General"] = [
-                ("UUID", m.id),
-                ("Arranque automático", "sí" if dom.autostart() else "no"),
-                ("Persistente", "sí" if dom.isPersistent() else "no"),
-                ("Arquitectura", os_type.get("arch", "-") if os_type is not None else "-"),
-                ("Máquina", os_type.get("machine", "-") if os_type is not None else "-"),
-                ("Modo CPU", cpu.get("mode", "-") if cpu is not None else "-"),
-            ]
-            m.sections["Recursos"] = [
-                ("vCPU", m.cpus),
-                ("Memoria máxima", m.memory),
-                ("IPs", ", ".join(m.ips) or "-"),
-            ]
-            m.sections["Discos"] = [
-                (f"{d.find('target').get('dev')} ({d.get('device')})",
-                 self._disk_source(d))
-                for d in root.findall("devices/disk") if d.find("target") is not None
-            ]
-            m.sections["Red"] = [
-                (i.find("mac").get("address") if i.find("mac") is not None else "-",
-                 self._iface_desc(i))
-                for i in root.findall("devices/interface")
-            ]
-            m.sections["Pantalla"] = [
-                (g.get("type"), f"puerto {g.get('port', 'auto')}")
-                for g in root.findall("devices/graphics")
-            ]
-            graphics = root.find("devices/graphics")
-            m.display = graphics.get("type") if graphics is not None else ""
-            return m
+            return self._get(conn, machine_id)
+        except libvirt.libvirtError as e:
+            raise DriverError(f"No se pudo leer la VM: {e}") from e
         finally:
             conn.close()
+
+    def _get(self, conn, machine_id: str) -> Machine:
+        dom = self._domain(conn, machine_id)
+        m = self._summary(dom)
+        xml = dom.XMLDesc()
+        m.raw_config, m.raw_label = xml, "XML de libvirt"
+        root = ET.fromstring(xml)
+
+        os_type = root.find("os/type")
+        cpu = root.find("cpu")
+        m.sections["General"] = [
+            ("UUID", m.id),
+            ("Arranque automático", "sí" if dom.autostart() else "no"),
+            ("Persistente", "sí" if dom.isPersistent() else "no"),
+            ("Arquitectura", os_type.get("arch", "-") if os_type is not None else "-"),
+            ("Máquina", os_type.get("machine", "-") if os_type is not None else "-"),
+            ("Modo CPU", cpu.get("mode", "-") if cpu is not None else "-"),
+        ]
+        m.sections["Recursos"] = [
+            ("vCPU", m.cpus),
+            ("Memoria máxima", m.memory),
+            ("IPs", ", ".join(m.ips) or "-"),
+        ]
+        m.sections["Discos"] = [
+            (f"{d.find('target').get('dev')} ({d.get('device')})",
+             self._disk_source(d))
+            for d in root.findall("devices/disk") if d.find("target") is not None
+        ]
+        m.sections["Red"] = [
+            (i.find("mac").get("address") if i.find("mac") is not None else "-",
+             self._iface_desc(i))
+            for i in root.findall("devices/interface")
+        ]
+        m.sections["Pantalla"] = [
+            (g.get("type"), f"puerto {g.get('port', 'auto')}")
+            for g in root.findall("devices/graphics")
+        ]
+        graphics = root.find("devices/graphics")
+        m.display = graphics.get("type") if graphics is not None else ""
+        return m
 
     def usage(self, machine_id: str) -> Usage:
         conn = self._conn()
@@ -752,9 +772,17 @@ class KvmDriver(Driver):
             return []
         return sorted(pool.name() for pool in pools)
 
+    _pools_refreshed = -1e9
+
     def _isos(self, conn, refresh: bool = True) -> list[tuple[str, str]]:
         """(ruta, nombre) de las ISOs de todos los pools activos."""
         isos = []
+        # Releer los pools (por si hay ISOs nuevas) es lo que más tarda del formulario
+        # de alta: con una vez cada pocos segundos basta
+        if refresh and time.monotonic() - KvmDriver._pools_refreshed < 15:
+            refresh = False
+        elif refresh:
+            KvmDriver._pools_refreshed = time.monotonic()
         for pool in conn.listAllStoragePools(libvirt.VIR_CONNECT_LIST_STORAGE_POOLS_ACTIVE):
             if refresh:
                 try:
@@ -1244,43 +1272,71 @@ class KvmDriver(Driver):
     def interfaces(self, machine_id: str) -> list[Interface]:
         conn = self._conn()
         try:
-            dom = self._domain(conn, machine_id)
-            root = ET.fromstring(dom.XMLDesc(XML_FLAGS))
-            running, agent = dom.isActive(), self._has_agent(root)
-            live = self._live_addresses(dom) if running else {}
-            nets = {n.name(): ET.fromstring(n.XMLDesc()) for n in conn.listAllNetworks()}
-            result = []
-            for el in root.findall("devices/interface"):
-                mac = el.find("mac").get("address").lower()
-                src, model = el.find("source"), el.find("model")
-                network = src.get("network") if src is not None else None
-                where = network or (src.get("bridge") if src is not None else "") or "-"
-                iface = Interface(key=mac, mac=mac, model=model.get("type") if model is not None
-                                  else "", network=where, ips=live.get(mac, []))
-                ip_el = nets[network].find("ip/dhcp") if network in nets else None
-                if network in nets and ip_el is not None:
-                    reserved = next((h.get("ip") for h in ip_el.findall("host")
-                                     if (h.get("mac") or "").lower() == mac), None)
-                    iface.dhcp = True
-                    iface.defined_ip = reserved or ""
-                    iface.ip_config = (f"DHCP de libvirt, reserva fija {reserved}" if reserved
-                                       else "DHCP de libvirt")
-                    iface.set_ip_hint = (f"Se crea una reserva DHCP en «{network}»"
-                                         + (" y se renueva la IP dentro de la VM."
-                                            if agent else ": la VM la recibe al renovar su IP "
-                                            "(o al reiniciar)."))
-                else:
-                    iface.ip_config = ("sin DHCP en la red" if network else "bridge del host") + \
-                                      ": la IP se configura dentro de la VM"
-                    iface.can_set_ip = agent
-                    iface.set_ip_hint = ("Se configura dentro de la VM con qemu-guest-agent "
-                                         "(debe estar encendida)." if agent else
-                                         "Sin qemu-guest-agent: Hangar no puede entrar a "
-                                         "cambiarla. Instálalo en la VM o cámbiala a mano.")
-                result.append(iface)
+            return self._interfaces_of(self._domain(conn, machine_id), self._network_xml(conn))
+        finally:
+            conn.close()
+
+    def interfaces_all(self) -> dict[str, list[Interface]]:
+        # Una conexión y las redes leídas una vez, en lugar de por cada VM
+        conn = self._conn()
+        try:
+            nets = self._network_xml(conn)
+            result = {}
+            for dom in conn.listAllDomains():
+                try:
+                    result[dom.UUIDString()] = self._interfaces_of(dom, nets)
+                except libvirt.libvirtError:
+                    continue            # la VM desapareció mientras se listaba
             return result
         finally:
             conn.close()
+
+    @staticmethod
+    def _network_xml(conn) -> dict[str, ET.Element]:
+        nets = {}
+        for network in conn.listAllNetworks():
+            try:
+                nets[network.name()] = ET.fromstring(network.XMLDesc())
+            except libvirt.libvirtError:
+                continue
+        return nets
+
+    def _interfaces_of(self, dom, nets: dict[str, ET.Element]) -> list[Interface]:
+        root = ET.fromstring(dom.XMLDesc(XML_FLAGS))
+        running, agent = dom.isActive(), self._has_agent(root)
+        live = self._live_addresses(dom) if running else {}
+        result = []
+        for el in root.findall("devices/interface"):
+            if el.find("mac") is None:
+                continue
+            mac = el.find("mac").get("address").lower()
+            src, model = el.find("source"), el.find("model")
+            network = src.get("network") if src is not None else None
+            where = network or (src.get("bridge") if src is not None else "") or "-"
+            iface = Interface(key=mac, mac=mac, model=model.get("type") if model is not None
+                              else "", network=where, ips=live.get(mac, []))
+            ip_el = nets[network].find("ip/dhcp") if network in nets else None
+            if network in nets and ip_el is not None:
+                reserved = next((h.get("ip") for h in ip_el.findall("host")
+                                 if (h.get("mac") or "").lower() == mac), None)
+                iface.dhcp = True
+                iface.defined_ip = reserved or ""
+                iface.ip_config = (f"DHCP de libvirt, reserva fija {reserved}" if reserved
+                                   else "DHCP de libvirt")
+                iface.set_ip_hint = (f"Se crea una reserva DHCP en «{network}»"
+                                     + (" y se renueva la IP dentro de la VM."
+                                        if agent else ": la VM la recibe al renovar su IP "
+                                        "(o al reiniciar)."))
+            else:
+                iface.ip_config = ("sin DHCP en la red" if network else "bridge del host") + \
+                                  ": la IP se configura dentro de la VM"
+                iface.can_set_ip = agent
+                iface.set_ip_hint = ("Se configura dentro de la VM con qemu-guest-agent "
+                                     "(debe estar encendida)." if agent else
+                                     "Sin qemu-guest-agent: Hangar no puede entrar a "
+                                     "cambiarla. Instálalo en la VM o cámbiala a mano.")
+            result.append(iface)
+        return result
 
     def interface_fields(self, machine_id: str) -> list[Field]:
         conn = self._conn()

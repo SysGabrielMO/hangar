@@ -71,7 +71,7 @@ def _docker_networks(client) -> list[Net]:
     # La lista de redes de Docker no dice quién hay en cada una: se saca de los
     # contenedores, que además incluye los que están parados.
     members: dict[str, list] = {}
-    for c in client.containers.list(all=True):
+    for c in client.containers.list(all=True, ignore_removed=True):
         for net_name, cfg in ((c.attrs.get("NetworkSettings") or {}).get("Networks") or {}).items():
             ip = (cfg or {}).get("IPAddress") or ((cfg or {}).get("IPAMConfig") or {}).get("IPv4Address")
             members.setdefault(net_name, []).append(("docker", c.name, c.name, [ip] if ip else []))
@@ -145,15 +145,20 @@ def collect():
 
     machines, list_errors = list_all()
     errors += [f"{DRIVERS[k].label}: {e}" for k, e in list_errors.items()]
+    # Interfaces de todas las máquinas con una consulta por tecnología
+    # (los contenedores Docker ya vienen en _docker_networks)
+    interfaces = {}
+    for kind in {m.kind for m in machines} - {"docker"}:
+        try:
+            interfaces[kind] = DRIVERS[kind].interfaces_all()
+        except DriverError:
+            interfaces[kind] = {}
+    saved_all = db.all_iface_ips_by_key()
     for m in machines:
         if m.kind == "docker":
-            continue      # ya vienen en _docker_networks
-        try:
-            ifaces = DRIVERS[m.kind].interfaces(m.id)
-        except DriverError:
             continue
-        saved_ips = db.get_iface_ips(m.kind, m.id)
-        for i in ifaces:
+        saved_ips = saved_all.get((m.kind, m.id), {})
+        for i in interfaces[m.kind].get(m.id, []):
             i.defined_ip = saved_ips.get(i.key) or i.defined_ip
             # KVM indica la red libvirt; LXC indica el bridge
             target = by_name.get(i.network) or by_bridge.get(i.network) or bridges.get(i.network)
@@ -269,6 +274,8 @@ def libvirt_action(name: str, action: str):
         return _back(error=str(e))
     except libvirt.libvirtError as e:
         return _back(error=str(e))
+    except (ValueError, TypeError):    # nombre con caracteres imposibles
+        return _back(error="Nombre de red no válido.")
     return _back(error="Acción no válida.")
 
 

@@ -22,7 +22,8 @@
   <span>{{ m.name }}</span>
 </nav>
 
-<section class="machine-head">
+<section class="machine-head" id="machine-head" data-state="{{ m.state }}"
+         data-state-url="/api/state/{{ m.kind }}/{{ m.id | urlencode }}">
   <div>
     <h1>{{ m.name }}</h1>
     <div class="head-meta">
@@ -89,6 +90,10 @@
   </div>
 </section>
 
+<div class="alert info" id="state-changed" hidden>
+  {{ icon("info") }}<span>El estado de la máquina ha cambiado. Recarga cuando termines lo que estás escribiendo.</span>
+  <a class="btn small" href="">Recargar</a>
+</div>
 {% if not flash_in_section %}{{ flash() }}{% endif %}
 
 <nav class="tabs" aria-label="Secciones de la máquina">

@@ -210,6 +210,17 @@ class Driver:
     def interfaces(self, machine_id: str) -> list[Interface]:
         raise NotImplementedError
 
+    def interfaces_all(self) -> dict[str, list[Interface]]:
+        """Interfaces de todas las máquinas, por id (para la página de redes).
+        Los drivers la redefinen para no hacer una consulta por máquina."""
+        result = {}
+        for machine in self.list():
+            try:
+                result[machine.id] = self.interfaces(machine.id)
+            except DriverError:
+                continue
+        return result
+
     def interface_fields(self, machine_id: str) -> list[Field]:
         """Formulario para añadir una interfaz."""
         raise NotImplementedError

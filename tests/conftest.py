@@ -8,3 +8,13 @@ from hangar.main import app
 def client():
     # Host permitido por el middleware de Hangar (TestClient usa "testserver").
     return TestClient(app, base_url="http://127.0.0.1")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_caches():
+    """La lista de máquinas se guarda unos segundos: que no pase de un test a otro."""
+    from hangar import common
+    common.invalidate_list()
+    common.pop_notices()
+    yield
+    common.invalidate_list()

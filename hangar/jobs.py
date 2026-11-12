@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from .common import invalidate_list
 from .drivers import DriverError
 
 Log = Callable[[str], None]
@@ -70,6 +71,7 @@ def submit(kind: str, title: str, fn: Callable[[Log], str], tab: str = "info",
             job.error, job.status = f"Error inesperado: {e!r}", "error"
         finally:
             job.finished_at = time.time()
+            invalidate_list()         # la tarea ha cambiado algo: que se vuelva a listar
 
     threading.Thread(target=run, daemon=True).start()
     return job

@@ -5,10 +5,14 @@ un pequeño script ayudante que se ejecuta con sudo (ver scripts/).
 """
 from __future__ import annotations
 
+import json
+import os
 import platform
 import re
 import subprocess
+import threading
 import time
+from pathlib import Path
 
 from .base import (SNAPSHOT_NAME_RE, DeletePlan, Driver, DriverError, Field, Interface, Machine,
                    Snapshot, Usage, User, check_name, host_bridges, human_bytes, parse_ip_request,
@@ -18,6 +22,9 @@ HELPER = "/usr/local/sbin/hangar-lxc-helper"
 DOWNLOAD_TEMPLATE = "/usr/share/lxc/templates/lxc-download"
 HOST_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine(), platform.machine())
 FALLBACK_IMAGES = ["debian/trixie", "debian/bookworm", "ubuntu/noble", "alpine/3.22"]
+IMAGES_TTL = 24 * 3600
+IMAGES_CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") \
+    / "hangar" / "lxc-images.json"
 
 CPUSET_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
 UNITS = {"": 1 / 1024 ** 2, "K": 1 / 1024, "M": 1, "G": 1024}
@@ -64,19 +71,59 @@ class LxcDriver(Driver):
     command = ["sudo", "-n", HELPER]
     snapshot_name_auto = True
 
+    # Cada consulta al ayudante es un sudo (~50 ms) y una misma página pide lo
+    # mismo varias veces (ficha, recursos, plan de borrado…): las lecturas se
+    # guardan un instante y cualquier acción que cambie algo las tira.
+    READ_ACTIONS = ("dump", "snap-list")
+    READ_TTL = 1.5
+
+    def __init__(self):
+        self._reads: dict[tuple, tuple[float, str]] = {}
+        self._reads_lock = threading.Lock()
+
     def _run(self, *args: str) -> str:
+        is_read = bool(args) and args[0] in self.READ_ACTIONS
+        if is_read:
+            with self._reads_lock:
+                hit = self._reads.get(args)
+                if hit and time.monotonic() - hit[0] < self.READ_TTL:
+                    return hit[1]
+        else:
+            with self._reads_lock:
+                self._reads.clear()
         try:
             p = subprocess.run([*self.command, *args],
                                capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired as e:
             raise DriverError("LXC tardó demasiado en responder") from e
+        except OSError as e:           # p. ej. no hay sudo en el sistema
+            raise DriverError(f"No se pudo ejecutar el ayudante LXC: {e}") from e
+        except ValueError as e:        # un argumento con un byte nulo
+            raise DriverError("Valor no válido.") from e
+        finally:
+            if not is_read:            # lo que se leyó mientras tanto ya no vale
+                with self._reads_lock:
+                    self._reads.clear()
         if p.returncode != 0:
             err = p.stderr.strip()
             if "password" in err or "contraseña" in err or "No such file" in err:
                 err = ("Falta instalar el ayudante LXC: "
                        "sudo ./scripts/install-lxc-helper.sh")
             raise DriverError(err or f"Error de LXC (código {p.returncode})")
+        if is_read:
+            with self._reads_lock:
+                self._reads[args] = (time.monotonic(), p.stdout)
+                if len(self._reads) > 64:
+                    self._reads.pop(next(iter(self._reads)))
         return p.stdout
+
+    def _stream(self, args: list[str], log, **kwargs) -> None:
+        """Acción larga del ayudante con su salida en el registro de la tarea."""
+        try:
+            run_streaming([*self.command, *args], log, **kwargs)
+        finally:
+            with self._reads_lock:     # cambia cosas: las lecturas guardadas ya no valen
+                self._reads.clear()
 
     def list(self) -> list[Machine]:
         return sorted(self._parse_dump(self._run("dump")), key=lambda m: m.name)
@@ -244,9 +291,20 @@ class LxcDriver(Driver):
     _images_at = 0.0
 
     def _image_list(self) -> list[str]:
-        """Imágenes 'distro/versión' del servidor de lxc-download (caché de 1 h)."""
-        if self._images and time.time() - self._images_at < 3600:
+        """Imágenes 'distro/versión' del servidor de lxc-download.
+
+        Bajar el índice tarda unos segundos, así que se guarda en memoria y en
+        disco (un día): el formulario de alta se abre al momento."""
+        if self._images and time.time() - self._images_at < IMAGES_TTL:
             return self._images
+        try:
+            saved = json.loads(IMAGES_CACHE.read_text(encoding="utf-8"))
+            if saved.get("arch") == HOST_ARCH and saved.get("images") \
+                    and time.time() - float(saved.get("at", 0)) < IMAGES_TTL:
+                LxcDriver._images, LxcDriver._images_at = list(saved["images"]), float(saved["at"])
+                return self._images
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
         try:
             out = subprocess.run([DOWNLOAD_TEMPLATE, "--list", "--arch", HOST_ARCH],
                                  capture_output=True, text=True, timeout=30).stdout
@@ -256,7 +314,13 @@ class LxcDriver(Driver):
                   if len(p) == 5 and p[2] == HOST_ARCH and p[3] == "default"]
         if images:
             LxcDriver._images, LxcDriver._images_at = images, time.time()
-        return images or FALLBACK_IMAGES
+            try:
+                IMAGES_CACHE.parent.mkdir(parents=True, exist_ok=True)
+                IMAGES_CACHE.write_text(json.dumps(
+                    {"arch": HOST_ARCH, "at": self._images_at, "images": images}), encoding="utf-8")
+            except OSError:
+                pass                    # sin caché en disco: solo en memoria
+        return images or self._images or FALLBACK_IMAGES
 
     def create_fields(self) -> list[Field]:
         images = self._image_list()
@@ -283,7 +347,7 @@ class LxcDriver(Driver):
     def create(self, spec: dict, log) -> str:
         name = spec["name"]
         dist, release = spec["image"].split("/", 1)
-        run_streaming([*self.command, "create", name, dist, release, HOST_ARCH], log,
+        self._stream(["create", name, dist, release, HOST_ARCH], log,
                       timeout=1800)
         for note in self.update(name, spec["values"]):
             log(note)
@@ -307,7 +371,14 @@ class LxcDriver(Driver):
     # --- Red ---------------------------------------------------------------
 
     def interfaces(self, machine_id: str) -> list[Interface]:
-        m = self.get(machine_id)
+        return self._interfaces_of(self.get(machine_id))
+
+    def interfaces_all(self) -> dict[str, list[Interface]]:
+        # Un solo volcado del ayudante para todos los contenedores
+        return {m.id: self._interfaces_of(m) for m in self._parse_dump(self._run("dump"))}
+
+    @staticmethod
+    def _interfaces_of(m: Machine) -> list[Interface]:
         nets: dict[str, dict[str, str]] = {}
         for key, values in _parse_config(m.raw_config).items():
             if key.startswith("lxc.net."):
@@ -375,18 +446,18 @@ class LxcDriver(Driver):
     def create_snapshot(self, machine_id: str, name: str, description: str, log) -> str:
         before = {s.name for s in self.snapshots(machine_id)}
         log("Copiando el rootfs (puede tardar según lo que ocupe)…")
-        run_streaming([*self.command, "snap-create", machine_id, description], log)
+        self._stream(["snap-create", machine_id, description], log)
         new = [s.name for s in self.snapshots(machine_id) if s.name not in before]
         log(f"Snapshot «{new[0] if new else '?'}» creado.")
         return new[0] if new else ""
 
     def revert_snapshot(self, machine_id: str, name: str, log) -> None:
         log(f"Restaurando «{name}»: el contenedor actual se sustituye por la copia…")
-        run_streaming([*self.command, "snap-restore", machine_id, name], log)
+        self._stream(["snap-restore", machine_id, name], log)
         log("Hecho.")
 
     def delete_snapshot(self, machine_id: str, name: str, log) -> None:
-        run_streaming([*self.command, "snap-delete", machine_id, name], log)
+        self._stream(["snap-delete", machine_id, name], log)
         log(f"Snapshot «{name}» borrado.")
 
     # --- Borrar ----------------------------------------------------------
