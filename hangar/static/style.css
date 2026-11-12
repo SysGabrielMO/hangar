@@ -202,6 +202,10 @@ label { font-weight: 600; font-size: 13.5px; }
 .field.checkbox label, label.checkbox { display: flex; align-items: center; gap: 8px; font-weight: 500; cursor: pointer; }
 .edit-form { max-width: 640px; display: flex; flex-direction: column; gap: 16px; }
 .edit-form input[type=number] { max-width: 180px; }
+/* Formulario de alta en bloques */
+.form-block { display: flex; flex-direction: column; gap: 14px; min-width: 0; margin: 0; padding: 0 0 18px; border: 0; border-bottom: 1px solid var(--border); }
+.form-block > legend { display: flex; align-items: center; gap: 8px; padding: 0; margin-bottom: 12px; font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.form-block > legend .icon { width: 15px; height: 15px; }
 .form-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .inline-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
 .inline-form label { display: flex; flex-direction: column; gap: 4px; }
@@ -221,6 +225,37 @@ label { font-weight: 600; font-size: 13.5px; }
 .narrow .edit-form { max-width: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
 .grid > .card + .card { margin-top: 0; }
+/* Resumen de la ficha: lo útil arriba, lo técnico plegado */
+.overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; margin-bottom: 16px; }
+.overview > .card + .card { margin-top: 0; }
+.card-link { margin-left: auto; font-size: 12.5px; font-weight: 600; }
+.card h2 .n + .card-link { margin-left: auto; }
+.ov-list { list-style: none; margin: 0; padding: 0; }
+.ov-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border); }
+.ov-list li:first-child { border-top: 0; padding-top: 0; }
+.ov-list li:last-child { padding-bottom: 0; }
+.ov-main { display: flex; flex-direction: column; min-width: 0; }
+.ov-main > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-name { font-weight: 650; color: var(--text); }
+a.ov-name:hover { color: var(--accent); }
+.ov-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; text-align: right; }
+.ov-usage { display: grid; gap: 14px; }
+.ov-meter-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.ov-meter-head span { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.ov-meter-head strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+.ov-meter .meter { margin-bottom: 4px; }
+.ov-notes { grid-column: 1 / -1; }
+.ov-notes-body { max-height: 260px; overflow: auto; }
+details.tech > summary .small { font-weight: 400; }
+.tech-grid { gap: 22px 32px; }
+.tech-grid h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+/* Listas vacías: un icono, una frase y qué hacer */
+.empty-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 16px; text-align: center; color: var(--muted); }
+.empty-state > .icon { width: 30px; height: 30px; padding: 9px; box-sizing: content-box; border-radius: 50%; background: var(--code-bg); color: var(--muted); }
+.empty-state p { margin: 0; max-width: 46ch; }
+.empty-state strong { display: block; color: var(--text); font-size: 15px; }
+.empty-state.compact { padding: 8px 4px 4px; gap: 8px; font-size: 13.5px; }
+.empty-state.compact > .icon { width: 20px; height: 20px; padding: 7px; }
 .grid.notes { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px; margin: 0; }
 dt { color: var(--muted); }
@@ -312,12 +347,20 @@ td.right, th.right { text-align: right; }
 .group-head .mod-dot { width: 10px; height: 10px; }
 
 /* Anchos fijos: las columnas quedan alineadas de un grupo a otro */
-.machines { table-layout: fixed; min-width: 780px; }
-.machines th.c-kind { width: 86px; }
-.machines th.c-res { width: 200px; }
-.machines th.c-ip { width: 230px; }
-.machines th.c-mod { width: 150px; }
+.machines { table-layout: fixed; min-width: 860px; }
+.machines th.c-kind { width: 94px; }
+.machines th.c-res { width: 168px; }
+.machines th.c-use { width: 150px; }
+.machines th.c-ip { width: 190px; }
+.machines th.c-mod { width: 136px; }
 .machines th.c-act { width: 96px; }
+/* Consumo en vivo de cada fila: dos barritas (CPU y RAM) */
+.use { display: grid; grid-template-columns: 28px 1fr 54px; align-items: center; gap: 6px; font-size: 11.5px; line-height: 16px; color: var(--muted); }
+.use .meter { height: 5px; }
+.use-l { font-weight: 600; letter-spacing: .02em; }
+.use-v { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.use-off { color: var(--muted); }
+@media (max-width: 1180px) { .machines .c-res { display: none; } .machines { min-width: 700px; } }
 .machines td { overflow: hidden; text-overflow: ellipsis; }
 .machines td.js-ips { white-space: normal; overflow-wrap: anywhere; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -405,10 +448,21 @@ pre.log { max-height: 58vh; white-space: pre-wrap; overflow-wrap: anywhere; back
 .spark { display: block; width: 100%; height: 96px; }
 
 /* --- Redes ---------------------------------------------------------------- */
-.nets td { vertical-align: top; }
-.nets td:first-child { white-space: nowrap; }
-.nets tr.inactive td { opacity: .55; }
-.members { display: flex; flex-wrap: wrap; gap: 5px; }
+/* Redes: una tarjeta por red, con sus máquinas dentro */
+.net-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: 16px; align-items: start; }
+.net-grid > .card + .card { margin-top: 0; }
+.net-card { padding: 16px 18px; }
+.net-card.inactive .net-facts, .net-card.inactive .members { opacity: .55; }
+.net-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; min-height: 30px; }
+.net-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.net-title h3 { margin: 0; font-size: 15.5px; font-weight: 700; overflow-wrap: anywhere; }
+.net-head .row-actions { flex-shrink: 0; }
+.tag.warn { background: var(--paused-bg, var(--code-bg)); color: var(--paused); font-weight: 600; }
+.net-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 0 0 14px; padding: 12px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.net-facts dt { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.net-facts dd { margin-top: 1px; }
+.members { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.members-title { flex-basis: 100%; margin-bottom: 2px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .member { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 3px; border-radius: 999px; background: var(--code-bg); color: var(--text); font-size: 12.5px; white-space: nowrap; }
 .member:hover { background: var(--accent-soft); text-decoration: none; }
 .member .badge { font-size: 10px; padding: 0 6px; border-radius: 999px; }
@@ -503,7 +557,7 @@ body.console-resizing, body.console-resizing * { cursor: ns-resize !important; u
   .inline-form input { width: 100%; }
   /* En el móvil la tabla se queda con lo esencial: nombre, IP y acciones */
   .machines { min-width: 0; }
-  .machines .c-kind, .machines .c-res, .machines .c-mod { display: none; }
+  .machines .c-kind, .machines .c-res, .machines .c-mod, .machines .c-use { display: none; }
   .machines th.c-ip { width: 132px; }
   .machines th, .machines td { padding: 10px; }
 }

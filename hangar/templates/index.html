@@ -73,7 +73,7 @@
   {% endif %}
 </div>
 
-{% if msg %}<div class="alert ok">{{ icon("check") }}<span>{{ msg }}</span></div>{% endif %}
+{% if msg %}<div class="alert ok" data-toast>{{ icon("check") }}<span>{{ msg }}</span></div>{% endif %}
 {% if error %}<div class="alert error">{{ icon("alert") }}<span>{{ error }}</span></div>{% endif %}
 
 {% for job in jobs %}
@@ -134,7 +134,7 @@
   <div class="table-wrap">
   <table class="machines">
     <thead>
-      <tr><th>Máquina</th><th class="c-kind">Tipo</th><th class="c-res">Recursos</th><th class="c-ip">IP</th>
+      <tr><th>Máquina</th><th class="c-kind">Tipo</th><th class="c-res">Recursos</th><th class="c-use" title="Consumo en vivo: CPU sobre el total del equipo y RAM sobre su límite (o la del equipo si no tiene)">Uso ahora</th><th class="c-ip">IP</th>
         {%- if not key %}<th class="c-mod">Módulo</th>{% endif %}<th class="c-act"><span class="sr-only">Acciones</span></th></tr>
     </thead>
     <tbody>
@@ -157,6 +157,12 @@
           {% if m.memory_mib %}<strong>{{ m.memory }}</strong>{% else %}RAM sin límite{% endif %}
           {%- endif -%}
         </td>
+        <td class="c-use js-usage" data-on="{{ '1' if m.state == 'running' else '' }}">
+          {%- if m.state == "running" -%}
+          <div class="use"><span class="use-l">CPU</span><div class="meter"><span style="width: 0"></span></div><span class="use-v">…</span></div>
+          <div class="use"><span class="use-l">RAM</span><div class="meter"><span style="width: 0"></span></div><span class="use-v">…</span></div>
+          {%- else %}<span class="use-off">—</span>{% endif -%}
+        </td>
         <td class="mono js-ips">{{ m.ips | join(", ") or "—" }}</td>
         {% if not key %}
         <td class="c-mod">
@@ -177,14 +183,16 @@
   </div>
 </section>
 {% else %}
-<div class="card empty">
+<div class="card"><div class="empty-state">
   {% if total %}
-  <p>Ninguna máquina coincide con estos filtros.</p>
-  <a class="btn" href="/">Ver todas</a>
+  {{ icon("search") }}
+  <p><strong>Ninguna máquina coincide</strong>Prueba con otro filtro o quita la búsqueda.</p>
+  <a class="btn small" href="/">Ver todas</a>
   {% else %}
-  <p>Todavía no hay ninguna máquina.</p>
+  {{ icon("server") }}
+  <p><strong>Todavía no hay ninguna máquina</strong>Crea una máquina virtual o un contenedor y aparecerá aquí.</p>
   <a class="btn primary" href="/new/kvm">{{ icon("plus") }} Crear la primera</a>
   {% endif %}
-</div>
+</div></div>
 {% endfor %}
 {% endblock %}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+from concurrent.futures import ThreadPoolExecutor
 import io
 import ipaddress
 import json
@@ -134,31 +135,56 @@ class DockerDriver(Driver):
     def usage(self, machine_id: str) -> Usage:
         client = self._client()
         try:
-            c = self._container(client, machine_id)
-            state = STATES.get(c.status, "unknown")
-            if state != "running":
-                return Usage(state=state)
-            try:
-                try:
-                    # one_shot: una sola lectura; sin él Docker espera 1 s a una segunda muestra
-                    stats = c.stats(stream=False, one_shot=True)
-                except (TypeError, docker.errors.InvalidVersion):
-                    stats = c.stats(stream=False)      # SDK o demonio antiguos
-            except DockerException as e:
-                raise DriverError(f"No se pudo leer el consumo: {e}") from e
-            cpu_ns = ((stats.get("cpu_stats") or {}).get("cpu_usage") or {}).get("total_usage", 0)
-            memory = stats.get("memory_stats") or {}
-            detail = memory.get("stats") or {}
-            # Como «docker stats»: sin la caché de ficheros, que el kernel libera si hace
-            # falta. Se llama inactive_file en cgroup v2 y total_inactive_file/cache en v1.
-            cache = next((detail[k] for k in ("inactive_file", "total_inactive_file", "cache")
-                          if detail.get(k) is not None), 0)
-            used = int(memory.get("usage", 0)) - int(cache)
-            limit = int((c.attrs.get("HostConfig") or {}).get("Memory") or 0)
-            return Usage(state=state, cpu_time=int(cpu_ns) / 1e9,
-                         mem_used=max(used, 0), mem_limit=limit)
+            return self._usage_of(self._container(client, machine_id))
         finally:
             client.close()
+
+    def usage_all(self) -> dict[str, Usage]:
+        client = self._client()
+        try:
+            containers = client.containers.list(ignore_removed=True)    # solo los encendidos
+            if not containers:
+                return {}
+
+            def one(c):
+                try:
+                    return c.name, self._usage_of(c)
+                except DriverError:
+                    return c.name, None
+
+            # Cada lectura es una petición a Docker: en paralelo
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                return {name: usage for name, usage in pool.map(one, containers)
+                        if usage is not None and usage.state == "running"}
+        except DockerException as e:
+            raise DriverError(f"Docker no responde: {getattr(e, 'explanation', None) or e}") from e
+        finally:
+            client.close()
+
+    @staticmethod
+    def _usage_of(c) -> Usage:
+        state = STATES.get(c.status, "unknown")
+        if state != "running":
+            return Usage(state=state)
+        try:
+            try:
+                # one_shot: una sola lectura; sin él Docker espera 1 s a una segunda muestra
+                stats = c.stats(stream=False, one_shot=True)
+            except (TypeError, docker.errors.InvalidVersion):
+                stats = c.stats(stream=False)      # SDK o demonio antiguos
+        except DockerException as e:
+            raise DriverError(f"No se pudo leer el consumo: {e}") from e
+        cpu_ns = ((stats.get("cpu_stats") or {}).get("cpu_usage") or {}).get("total_usage", 0)
+        memory = stats.get("memory_stats") or {}
+        detail = memory.get("stats") or {}
+        # Como «docker stats»: sin la caché de ficheros, que el kernel libera si hace
+        # falta. Se llama inactive_file en cgroup v2 y total_inactive_file/cache en v1.
+        cache = next((detail[k] for k in ("inactive_file", "total_inactive_file", "cache")
+                      if detail.get(k) is not None), 0)
+        used = int(memory.get("usage", 0)) - int(cache)
+        limit = int((c.attrs.get("HostConfig") or {}).get("Memory") or 0)
+        return Usage(state=state, cpu_time=int(cpu_ns) / 1e9,
+                     mem_used=max(used, 0), mem_limit=limit)
 
     def get(self, machine_id: str) -> Machine:
         client = self._client()

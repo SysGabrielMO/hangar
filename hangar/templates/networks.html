@@ -2,14 +2,16 @@
 {% block title %}Redes · Hangar{% endblock %}
 {% macro members(net) %}
 <div class="members">
+  <span class="members-title">{{ net.members | length }} {{ "máquina" if net.members | length == 1 else "máquinas" }}</span>
   {% for kind, id, name, ips in net.members %}
   <a class="member" href="/m/{{ kind }}/{{ id | urlencode }}?tab=network">
     <span class="badge {{ kind }}">{{ drivers[kind].label }}</span>{{ name }}
     {% if ips %}<span class="mono muted">{{ ips | join(", ") }}</span>{% endif %}
   </a>
-  {% else %}<span class="muted small">Ninguna máquina</span>{% endfor %}
+  {% endfor %}
 </div>
 {% endmacro %}
+{% set mode_es = {"nat": "NAT", "aislada": "Aislada", "bridge": "Bridge", "route": "Enrutada", "open": "Abierta"} %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -18,48 +20,52 @@
   </div>
 </div>
 
-{% if msg %}<div class="alert ok">{{ icon("check") }}<span>{{ msg }}</span></div>{% endif %}
+{% if msg %}<div class="alert ok" data-toast>{{ icon("check") }}<span>{{ msg }}</span></div>{% endif %}
 {% if error %}<div class="alert error">{{ icon("alert") }}<span>{{ error }}</span></div>{% endif %}
 {% for e in errors %}<div class="alert error">{{ icon("alert") }}<span>{{ e }}</span></div>{% endfor %}
 
 <h2 class="section-title">Redes de libvirt (KVM) · {{ libvirt_nets | length }}</h2>
 <div class="stack">
   {% if libvirt_nets %}
-  <div class="table-wrap">
-  <table class="nets">
-    <thead><tr><th>Red</th><th>Tipo</th><th>Subred</th><th>DHCP</th><th>Máquinas</th><th></th></tr></thead>
-    <tbody>
+  <div class="net-grid">
     {% for n in libvirt_nets %}
-    <tr class="{{ 'inactive' if not n.active }}">
-      <td><strong>{{ n.name }}</strong>
-        <div class="muted small mono">{{ n.bridge }}{% if n.autostart %} · autoarranque{% endif %}</div></td>
-      <td class="nowrap">{{ {"nat": "NAT", "aislada": "Aislada", "bridge": "Bridge", "route": "Enrutada", "open": "Abierta"}.get(n.mode, n.mode) }}
-        {% if not n.active %}<div><span class="tag">inactiva</span></div>{% endif %}</td>
-      <td class="mono nowrap">{{ n.subnet or "—" }}{% if n.gateway %}<div class="muted small">host {{ n.gateway }}</div>{% endif %}</td>
-      <td class="small">{% if n.dhcp %}<span class="mono">{{ n.dhcp }}</span>{% else %}<span class="tag">sin DHCP</span>{% endif %}</td>
-      <td>{{ members(n) }}</td>
-      <td><div class="row-actions">
-        {% if n.active %}
-        <form method="post" action="/networks/libvirt/{{ n.name | urlencode }}/stop"
-              data-confirm-title="Desactivar «{{ n.name }}»" data-confirm-label="Desactivar"
-              data-confirm="Las máquinas conectadas a esta red se quedarán sin conexión hasta que la actives de nuevo.">
-          <button class="btn small">Desactivar</button></form>
-        {% else %}
-        <form method="post" action="/networks/libvirt/{{ n.name | urlencode }}/start">
-          <button class="btn small">Activar</button></form>
-        {% endif %}
-        <form method="post" action="/networks/libvirt/{{ n.name | urlencode }}/delete"
-              data-confirm-title="Borrar la red «{{ n.name }}»" data-confirm-label="Borrar" data-confirm-danger
-              data-confirm="Se elimina la red de libvirt. No se puede deshacer.">
-          <button class="btn small danger subtle" title="Borrar la red" aria-label="Borrar la red {{ n.name }}">{{ icon("trash") }}</button></form>
-      </div></td>
-    </tr>
+    <article class="card net-card {{ 'inactive' if not n.active }}">
+      <header class="net-head">
+        <div class="net-title">
+          <span class="dot {{ 'running' if n.active else 'stopped' }}" title="{{ 'Activa' if n.active else 'Inactiva' }}"></span>
+          <h3>{{ n.name }}</h3>
+          <span class="tag">{{ mode_es.get(n.mode, n.mode) }}</span>
+          {% if not n.active %}<span class="tag warn">inactiva</span>{% endif %}
+        </div>
+        <div class="row-actions">
+          {% if n.active %}
+          <form method="post" action="/networks/libvirt/{{ n.name | urlencode }}/stop"
+                data-confirm-title="Desactivar «{{ n.name }}»" data-confirm-label="Desactivar"
+                data-confirm="Las máquinas conectadas a esta red se quedarán sin conexión hasta que la actives de nuevo.">
+            <button class="btn small">Desactivar</button></form>
+          {% else %}
+          <form method="post" action="/networks/libvirt/{{ n.name | urlencode }}/start">
+            <button class="btn small">{{ icon("play") }} Activar</button></form>
+          {% endif %}
+          <form method="post" action="/networks/libvirt/{{ n.name | urlencode }}/delete"
+                data-confirm-title="Borrar la red «{{ n.name }}»" data-confirm-label="Borrar" data-confirm-danger
+                data-confirm="Se elimina la red de libvirt. No se puede deshacer.">
+            <button class="btn small danger subtle" title="Borrar la red" aria-label="Borrar la red {{ n.name }}">{{ icon("trash") }}</button></form>
+        </div>
+      </header>
+      <dl class="net-facts">
+        <div><dt>Subred</dt><dd class="mono">{{ n.subnet or "—" }}</dd></div>
+        <div><dt>Host</dt><dd class="mono">{{ n.gateway or "—" }}</dd></div>
+        <div><dt>DHCP</dt><dd class="mono">{{ n.dhcp or "no reparte" }}</dd></div>
+        <div><dt>Bridge</dt><dd class="mono">{{ n.bridge or "—" }}{% if n.autostart %} <span class="muted" title="Se activa sola al arrancar el equipo">· auto</span>{% endif %}</dd></div>
+      </dl>
+      {{ members(n) }}
+    </article>
     {% endfor %}
-    </tbody>
-  </table>
   </div>
   {% else %}
-  <div class="card empty">No hay redes de libvirt.</div>
+  <div class="card"><div class="empty-state">{{ icon("network") }}
+    <p><strong>No hay redes de libvirt</strong>Crea una aquí abajo para conectar tus máquinas virtuales.</p></div></div>
   {% endif %}
 
   <details class="card" {{ "open" if not libvirt_nets }}>
@@ -84,15 +90,15 @@
 
 {% if bridges %}
 <h2 class="section-title">Otros bridges del host · {{ bridges | length }}</h2>
-<div class="table-wrap">
-<table class="nets">
-  <thead><tr><th>Bridge</th><th>Máquinas</th></tr></thead>
-  <tbody>
+<div class="net-grid">
   {% for n in bridges %}
-  <tr><td class="mono nowrap"><strong>{{ n.name }}</strong></td><td>{{ members(n) }}</td></tr>
+  <article class="card net-card">
+    <header class="net-head">
+      <div class="net-title"><span class="dot running"></span><h3 class="mono">{{ n.name }}</h3><span class="tag">Bridge</span></div>
+    </header>
+    {{ members(n) }}
+  </article>
   {% endfor %}
-  </tbody>
-</table>
 </div>
 <p class="muted small">Bridges que no son de libvirt ni de Docker (por ejemplo lxcbr0). Los usan los contenedores LXC.</p>
 {% endif %}
@@ -100,26 +106,35 @@
 <h2 class="section-title">Redes de Docker · {{ docker_nets | length }}</h2>
 <div class="stack">
   {% if docker_nets %}
-  <div class="table-wrap">
-  <table class="nets">
-    <thead><tr><th>Red</th><th>Driver</th><th>Subred</th><th>Contenedores</th><th></th></tr></thead>
-    <tbody>
+  <div class="net-grid">
     {% for n in docker_nets %}
-    <tr>
-      <td><strong>{{ n.name }}</strong>{% if n.bridge %}<div class="muted small mono">{{ n.bridge }}</div>{% endif %}</td>
-      <td>{{ n.mode }}</td>
-      <td class="mono nowrap">{{ n.subnet or "—" }}{% if n.gateway %}<div class="muted small">gw {{ n.gateway }}</div>{% endif %}</td>
-      <td>{{ members(n) }}</td>
-      <td><div class="row-actions">{% if not n.builtin %}
-        <form method="post" action="/networks/docker/{{ n.name | urlencode }}/delete"
-              data-confirm-title="Borrar la red «{{ n.name }}»" data-confirm-label="Borrar" data-confirm-danger
-              data-confirm="Se elimina la red de Docker. No se puede deshacer.">
-          <button class="btn small danger subtle" title="Borrar la red" aria-label="Borrar la red {{ n.name }}">{{ icon("trash") }}</button></form>
-      {% endif %}</div></td>
-    </tr>
+    <article class="card net-card">
+      <header class="net-head">
+        <div class="net-title">
+          <span class="dot running"></span>
+          <h3>{{ n.name }}</h3>
+          <span class="tag">{{ n.mode }}</span>
+          {% if n.builtin %}<span class="tag" title="La crea Docker; no se puede borrar">de serie</span>{% endif %}
+        </div>
+        {% if not n.builtin %}
+        <div class="row-actions">
+          <form method="post" action="/networks/docker/{{ n.name | urlencode }}/delete"
+                data-confirm-title="Borrar la red «{{ n.name }}»" data-confirm-label="Borrar" data-confirm-danger
+                data-confirm="Se elimina la red de Docker. No se puede deshacer.">
+            <button class="btn small danger subtle" title="Borrar la red" aria-label="Borrar la red {{ n.name }}">{{ icon("trash") }}</button></form>
+        </div>
+        {% endif %}
+      </header>
+      {% if n.subnet or n.gateway or n.bridge %}
+      <dl class="net-facts">
+        <div><dt>Subred</dt><dd class="mono">{{ n.subnet or "—" }}</dd></div>
+        <div><dt>Puerta de enlace</dt><dd class="mono">{{ n.gateway or "—" }}</dd></div>
+        {% if n.bridge %}<div><dt>Bridge</dt><dd class="mono">{{ n.bridge }}</dd></div>{% endif %}
+      </dl>
+      {% endif %}
+      {{ members(n) }}
+    </article>
     {% endfor %}
-    </tbody>
-  </table>
   </div>
   {% endif %}
 

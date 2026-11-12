@@ -137,6 +137,19 @@ class Driver:
         """Consumo actual (CPU acumulada y memoria) para la pestaña Rendimiento."""
         raise NotImplementedError
 
+    def usage_all(self) -> dict[str, Usage]:
+        """Consumo de todas las máquinas encendidas, por id (para la portada).
+        Los drivers la redefinen para no hacer una consulta por máquina."""
+        result = {}
+        for machine in self.list():
+            if machine.state != "running":
+                continue
+            try:
+                result[machine.id] = self.usage(machine.id)
+            except DriverError:
+                continue
+        return result
+
     def has_agent(self, machine_id: str) -> bool:
         """¿Tiene el canal del agente QEMU configurado?"""
         return False

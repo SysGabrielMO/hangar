@@ -27,6 +27,20 @@ function toast(text, isError = false) {
   setTimeout(() => item.remove(), 4500);
 }
 
+// Los avisos de «hecho» que trae la página pasan a ser flotantes: no empujan el
+// contenido y se van solos. Sin JavaScript se quedan como banda. Los errores no se tocan.
+document.querySelectorAll(".alert[data-toast]").forEach((alert) => {
+  toast(alert.textContent.trim());
+  alert.remove();
+});
+// ...y se quitan de la dirección, para que recargar o volver atrás no los repita
+(() => {
+  const url = new URL(location.href);
+  if (!url.searchParams.has("msg")) return;
+  url.searchParams.delete("msg");
+  history.replaceState(null, "", url.pathname + url.search + url.hash);
+})();
+
 // --- Tema claro / oscuro --------------------------------------------------
 
 document.getElementById("theme-toggle")?.addEventListener("click", () => {
@@ -256,6 +270,44 @@ function powerButtons(m) {
 
 let statusBusy = false;
 
+// Barritas de consumo de una fila de la portada
+const USE_ROW = (label) => `<div class="use"><span class="use-l">${label}</span>`
+  + `<div class="meter"><span style="width: 0"></span></div><span class="use-v">…</span></div>`;
+
+function updateUsage(cell, machine, usage, host) {
+  if (!cell) return;
+  const on = machine.state === "running";
+  if (!on) {
+    if (cell.dataset.on !== "") {
+      cell.dataset.on = "";
+      cell.innerHTML = '<span class="use-off">—</span>';
+    }
+    return;
+  }
+  if (cell.dataset.on !== "1") {
+    cell.dataset.on = "1";
+    cell.innerHTML = USE_ROW("CPU") + USE_ROW("RAM");
+  }
+  if (!usage) return;                       // recién arrancada: aún no hay lectura
+  const [cpu, ram] = cell.querySelectorAll(".use");
+  const paint = (rowEl, pct, text, title) => {
+    const bar = rowEl.querySelector(".meter > span");
+    const shown = pct == null ? 0 : Math.max(0, Math.min(pct, 100));
+    bar.style.width = `${pct != null && shown > 0 && shown < 3 ? 3 : shown}%`;
+    bar.className = shown >= 90 ? "over" : (shown >= 70 ? "hot" : "");
+    rowEl.querySelector(".use-v").textContent = text;
+    rowEl.title = title;
+  };
+  // La primera lectura no tiene con qué comparar: la CPU llega en la siguiente
+  paint(cpu, usage.cpu, usage.cpu == null ? "…" : `${usage.cpu < 10 ? usage.cpu.toFixed(1) : Math.round(usage.cpu)} %`,
+    "CPU que usa, sobre el total del equipo");
+  const total = usage.limit || (host && host.mem_total) || 0;
+  const pct = total ? (usage.mem / total) * 100 : null;
+  paint(ram, pct, fmtBytes(usage.mem), usage.limit
+    ? `${fmtBytes(usage.mem)} de ${fmtBytes(usage.limit)} (${Math.round(pct)} %)`
+    : `${fmtBytes(usage.mem)}, sin límite: la barra es sobre la RAM del equipo`);
+}
+
 async function refreshStatus() {
   if (document.hidden || statusBusy) return;
   statusBusy = true;
@@ -277,6 +329,7 @@ async function refreshStatus() {
       }
       const ips = row.querySelector(".js-ips");
       if (ips) ips.textContent = m.ips.length ? m.ips.join(", ") : "—";
+      updateUsage(row.querySelector(".js-usage"), m, (data.usage || {})[row.dataset.key], data.host);
       const cell = row.querySelector(".js-power");
       if (cell && row.dataset.busy !== "1" && cell.dataset.state !== m.state) {
         cell.dataset.state = m.state;
@@ -558,6 +611,40 @@ function drawSpark(canvas, values, maxValue, color) {
     ctx.fill();
   }
 }
+
+// Resumen de la ficha: CPU y RAM de la máquina, al día cada pocos segundos
+(() => {
+  const box = document.querySelector("[data-overview-usage]");
+  if (!box) return;
+  const part = (name) => box.querySelector(`[data-use="${name}"]`);
+  const bar = (name, pct) => {
+    const el = box.querySelector(`[data-bar="${name}"]`);
+    const shown = Math.max(0, Math.min(pct || 0, 100));
+    el.style.width = `${shown}%`;
+    el.className = shown >= 90 ? "over" : (shown >= 70 ? "hot" : "");
+  };
+  const tick = async () => {
+    if (document.hidden) return;
+    try {
+      const response = await fetch(box.dataset.overviewUsage, {
+        headers: { Accept: "application/json" }, cache: "no-store",
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (data.state !== "running") return;       // la ficha se recarga sola al cambiar de estado
+      part("cpu").textContent = data.cpu_pct == null ? "Midiendo…" : `${data.cpu_pct.toFixed(1)} %`;
+      bar("cpu", data.cpu_pct);
+      part("mem").textContent = fmtBytes(data.mem_used);
+      bar("mem", data.mem_pct);
+      part("mem-note").textContent = data.mem_limit
+        ? `de ${fmtBytes(data.mem_limit)}` : "sin límite de memoria";
+    } catch (error) {
+      // se reintenta en la siguiente vuelta
+    }
+  };
+  setTimeout(tick, 1500);
+  setInterval(tick, 4000);
+})();
 
 function initMetrics() {
   const card = document.querySelector("[data-metrics-url]");

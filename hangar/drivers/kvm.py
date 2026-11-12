@@ -435,22 +435,44 @@ class KvmDriver(Driver):
     def usage(self, machine_id: str) -> Usage:
         conn = self._conn()
         try:
-            dom = self._domain(conn, machine_id)
-            info = dom.info()
-            state = STATES.get(info[0], "unknown")
-            if state != "running":
-                return Usage(state=state)
-            stats = {}
-            try:
-                stats = dom.memoryStats()
-            except libvirt.libvirtError:
-                pass
-            # libvirt devuelve memoriaStats y dom.info() en KiB, no en bytes.
-            mem_kib = stats.get("rss") or stats.get("actual") or info[2]
-            return Usage(state=state, cpu_time=info[4] / 1e9,
-                         mem_used=int(mem_kib) * 1024, mem_limit=info[1] * 1024)
+            return self._usage_of(self._domain(conn, machine_id))
+        except libvirt.libvirtError as e:
+            raise DriverError(f"No se pudo leer el consumo: {e}") from e
         finally:
             conn.close()
+
+    def usage_all(self) -> dict[str, Usage]:
+        conn = self._conn()
+        try:
+            result = {}
+            for dom in conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_ACTIVE):
+                try:
+                    usage = self._usage_of(dom)
+                    if usage.state == "running":
+                        result[dom.UUIDString()] = usage
+                except libvirt.libvirtError:
+                    continue            # se apagó o la borraron mientras se leía
+            return result
+        except libvirt.libvirtError as e:
+            raise DriverError(f"libvirt no responde: {e}") from e
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _usage_of(dom) -> Usage:
+        info = dom.info()
+        state = STATES.get(info[0], "unknown")
+        if state != "running":
+            return Usage(state=state)
+        stats = {}
+        try:
+            stats = dom.memoryStats()
+        except libvirt.libvirtError:
+            pass
+        # libvirt devuelve memoryStats y dom.info() en KiB, no en bytes.
+        mem_kib = stats.get("rss") or stats.get("actual") or info[2]
+        return Usage(state=state, cpu_time=info[4] / 1e9,
+                     mem_used=int(mem_kib) * 1024, mem_limit=info[1] * 1024)
 
     @staticmethod
     def _disk_source(disk) -> str:

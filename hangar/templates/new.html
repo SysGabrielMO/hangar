@@ -29,30 +29,65 @@
 
 {% if fields %}
 <form class="card edit-form" method="post" action="/new/{{ kind }}" id="new-machine-form" data-kind="{{ kind }}">
-  {{ render_fields(fields) }}
-  {% if kind == "kvm" %}
-  <div class="field network-editor" data-field="networks">
-    <label>Redes</label>
-    <div id="network-rows" class="network-rows"></div>
-    <div class="network-actions">
-      <button class="btn small" type="button" id="add-network">{{ icon("plus") }} Añadir red</button>
-      <button class="btn small ghost" type="button" id="new-network">Crear una red nueva…</button>
-    </div>
-    <small class="muted">La primera es la principal. Si quitas todas, la máquina se crea sin red.</small>
-    <input type="hidden" name="networks" id="networks-json">
-  </div>
+  {# Los campos, agrupados en bloques; los que no estén en ninguno van a «Otras opciones» #}
+  {% set blocks = {
+    "kvm": [("Lo básico", "server", ["name", "origin", "cloud_init", "osinfo"]),
+            ("Recursos", "cpu", ["vcpus", "memory_mib", "disks"])],
+    "lxc": [("Lo básico", "server", ["name", "image"]),
+            ("Recursos", "cpu", ["cpuset", "memory_mib"]),
+            ("Red", "network", ["bridge"]),
+            ("Arranque", "power", ["autostart", "start"])],
+    "docker": [("Lo básico", "server", ["name", "image", "command"]),
+               ("Recursos", "cpu", ["cpus", "memory_mib"]),
+               ("Red y datos", "network", ["network", "ports", "volumes", "env"]),
+               ("Arranque", "power", ["restart", "start"])],
+  }.get(kind, []) %}
+  {% set placed = [] %}
+  {% for title, block_icon, keys in blocks %}
+  {% set group = fields | selectattr("key", "in", keys) | list %}
+  {% if group %}
+  <fieldset class="form-block">
+    <legend>{{ icon(block_icon) }}{{ title }}</legend>
+    {{ render_fields(group) }}
+  </fieldset>
+  {% set _ = placed.extend(keys) %}
   {% endif %}
-  <div class="field">
-    <label for="f-module">Módulo</label>
-    <select id="f-module" name="module">
-      <option value="">— Sin módulo —</option>
-      {% for k, label in modules.items() %}<option value="{{ k }}" {{ "selected" if module == k }}>{{ k }} · {{ label }}</option>{% endfor %}
-    </select>
-  </div>
-  <div class="field">
-    <label for="f-description">Descripción <span class="muted">(opcional)</span></label>
-    <input id="f-description" name="description" value="{{ description }}" placeholder="Para qué sirve esta máquina">
-  </div>
+  {% endfor %}
+  {% set others = fields | rejectattr("key", "in", placed) | list %}
+  {% if others %}
+  <fieldset class="form-block">
+    <legend>{{ icon("settings") }}Otras opciones</legend>
+    {{ render_fields(others) }}
+  </fieldset>
+  {% endif %}
+  {% if kind == "kvm" %}
+  <fieldset class="form-block">
+    <legend>{{ icon("network") }}Red</legend>
+    <div class="field network-editor" data-field="networks">
+        <div id="network-rows" class="network-rows"></div>
+      <div class="network-actions">
+        <button class="btn small" type="button" id="add-network">{{ icon("plus") }} Añadir red</button>
+        <button class="btn small ghost" type="button" id="new-network">Crear una red nueva…</button>
+      </div>
+      <small class="muted">La primera es la principal. Si quitas todas, la máquina se crea sin red.</small>
+      <input type="hidden" name="networks" id="networks-json">
+    </div>
+  </fieldset>
+  {% endif %}
+  <fieldset class="form-block">
+    <legend>{{ icon("note") }}Organización</legend>
+    <div class="field">
+      <label for="f-module">Módulo</label>
+      <select id="f-module" name="module">
+        <option value="">— Sin módulo —</option>
+        {% for k, label in modules.items() %}<option value="{{ k }}" {{ "selected" if module == k }}>{{ k }} · {{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-description">Descripción <span class="muted">(opcional)</span></label>
+      <input id="f-description" name="description" value="{{ description }}" placeholder="Para qué sirve esta máquina">
+    </div>
+  </fieldset>
   <div class="form-foot">
     <button class="btn primary">{{ icon("plus") }} Crear {{ drivers[kind].label }}</button>
     <a class="btn ghost" href="/">Cancelar</a>

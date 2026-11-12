@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import datetime
@@ -272,6 +273,46 @@ def job_page(request: Request, job_id: str):
 
 # --- Ficha de una máquina -------------------------------------------------
 
+def _overview(driver, kind: str, machine) -> dict:
+    """Lo que se ve de un vistazo en la pestaña Resumen: red, discos, snapshots y
+    consumo. Cada dato se pide por separado y a la vez: si uno falla, se queda
+    vacío y el resto de la ficha sale igual."""
+    machine_id = machine.id
+
+    def ifaces():
+        found = driver.interfaces(machine_id)
+        saved = db.get_iface_ips(kind, machine_id)
+        for iface in found:
+            iface.defined_ip = saved.get(iface.key) or iface.defined_ip
+        return found
+
+    tasks = {"ifaces": ifaces}
+    if kind == "kvm":
+        tasks["disks"] = lambda: driver.disks(machine_id)
+    if not driver.no_snapshots_reason:
+        tasks["snaps"] = lambda: driver.snapshots(machine_id)
+    if machine.state == "running":
+        tasks["usage"] = lambda: metrics.sample(kind, machine_id)
+
+    def run(item):
+        name, task = item
+        try:
+            return name, task()
+        except Exception:               # noqa: BLE001 - el resumen nunca rompe la ficha
+            return name, None
+
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        result = dict(pool.map(run, tasks.items()))
+    snaps = result.get("snaps")
+    return {
+        "ifaces": result.get("ifaces") or [],
+        "disks": result.get("disks") or [],
+        "snap_count": len(snaps) if snaps is not None else None,
+        "last_snap": max(snaps, key=lambda snap: snap.created) if snaps else None,
+        "usage": result.get("usage"),
+    }
+
+
 @app.get("/m/{kind}/{machine_id}")
 def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
            sec: str = "", msg: str = "", error: str = ""):
@@ -290,7 +331,8 @@ def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
 
     ctx = {"users": [], "fields": [], "plan": None, "snaps": [], "ifaces": [],
            "iface_fields": [], "disks": [], "disk_fields": [], "tab_error": None,
-           "usage": None, "has_agent": False, "edit_error": None, "plan_error": None}
+           "usage": None, "has_agent": False, "edit_error": None, "plan_error": None,
+           "overview": None}
     try:
         if tab == "snapshots" and not driver.no_snapshots_reason:
             ctx["snaps"] = driver.snapshots(machine_id)
@@ -310,6 +352,9 @@ def detail(request: Request, kind: str, machine_id: str, tab: str = "info",
             ctx["disk_fields"] = driver.disk_fields(machine_id)
     except DriverError as e:
         ctx["tab_error"] = str(e)
+
+    if tab == "info":
+        ctx["overview"] = _overview(driver, kind, machine)
 
     if tab == "settings":
         # Cada sección falla por separado: un error al leer una no esconde las otras
@@ -581,6 +626,8 @@ def api_status():
         "host": host_stats(),
         "errors": errors,
         "notices": pop_notices(),
+        # Consumo en vivo de las encendidas (solo se pregunta a los tipos que tengan alguna)
+        "usage": metrics.sample_all({m.kind for m in machines if m.state == "running"}),
     }
 
 

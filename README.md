@@ -147,6 +147,12 @@ puede forzar desde el diálogo de confirmación).
 Los botones ▶/■ de cada fila arrancan o paran esa máquina sin abrir la ficha.
 El estado, las IPs y las cifras del host se refrescan solos cada 6 segundos.
 
+La columna **Uso ahora** enseña, en las máquinas encendidas, dos barritas con
+lo que consumen de verdad: la CPU sobre el total del equipo y la RAM sobre su
+límite (o sobre la RAM del equipo si no tiene). Se lee de una vez por
+tecnología (una conexión a libvirt, los cgroups de LXC, Docker en paralelo) y
+solo si hay alguna encendida.
+
 Solo se suma la RAM con límite configurado: un contenedor Docker o LXC sin
 límite no reserva una cantidad concreta y no entra en la cuenta.
 
@@ -240,7 +246,13 @@ muestra en estar lista y muestra «Midiendo…»; la RAM aparece desde el princi
 
 - **KVM**: tiempo de CPU de libvirt y memoria RSS del proceso.
 - **Docker**: `container.stats()` (descontando la caché de página).
-- **LXC**: `CPU use` y `Memory use` de `lxc-info`.
+- **LXC**: el cgroup del contenedor (`/sys/fs/cgroup/lxc.payload.<nombre>`), sin
+  pasar por el ayudante; si no existe (cgroup v1), `CPU use` y `Memory use` de
+  `lxc-info`.
+
+La pestaña **Resumen** enseña lo mismo en pequeño junto a las redes con sus
+IPs, los discos, el último snapshot y las notas; los datos técnicos (UUID,
+arquitectura…) quedan plegados en «Detalles técnicos».
 
 Si una máquina no tiene límite de memoria (por ejemplo, un contenedor Docker
 sin `--memory`), se muestra el consumo en MiB/GiB y «sin límite configurado».

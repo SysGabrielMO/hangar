@@ -6,7 +6,7 @@ import pytest
 
 from hangar import common, db, jobs, main, networks
 from hangar.drivers import DRIVERS
-from hangar.drivers.base import DeletePlan, DriverError, Field, Machine
+from hangar.drivers.base import DeletePlan, DriverError, Field, Machine, Usage
 from hangar.drivers.kvm import KvmDriver
 
 
@@ -313,3 +313,142 @@ def test_db_recreates_tables_if_file_is_deleted(tmp_path, monkeypatch):
     db.save_iface_ip("kvm", "vm-1", "mac", "10.0.0.5")
     (tmp_path / "hangar.db").unlink()
     assert db.get_iface_ips("kvm", "vm-1") == {}   # antes: «no such table»
+
+
+# --- Consumo en vivo en la portada y resumen de la ficha -------------------
+
+class UsageDriver:
+    """Driver mínimo que solo sabe decir cuánto consumen sus máquinas."""
+
+    def __init__(self):
+        self.cpu_time = 10.0
+        self.calls = 0
+
+    def usage_all(self):
+        self.calls += 1
+        return {"a": Usage(state="running", cpu_time=self.cpu_time,
+                           mem_used=512 * 2**20, mem_limit=1024 * 2**20)}
+
+
+@pytest.fixture
+def usage_driver(monkeypatch):
+    from hangar import metrics
+    driver = UsageDriver()
+    monkeypatch.setattr(metrics, "DRIVERS", {"fake": driver})
+    monkeypatch.setattr(metrics, "_all_cache", (0.0, {}))
+    metrics.forget("fake", "a")
+    yield driver
+    metrics.forget("fake", "a")
+
+
+def test_sample_all_needs_two_readings_for_cpu(usage_driver, monkeypatch):
+    from hangar import metrics
+    first = metrics.sample_all({"fake"})
+    assert first["fake/a"] == {"cpu": None, "mem": 512 * 2**20, "limit": 1024 * 2**20}
+
+    monkeypatch.setattr(metrics, "_all_cache", (0.0, {}))      # caduca la lectura guardada
+    usage_driver.cpu_time += 0.001
+    second = metrics.sample_all({"fake"})
+    assert second["fake/a"]["cpu"] is not None
+    assert 0 <= second["fake/a"]["cpu"] <= 100
+
+
+def test_sample_all_is_cached_between_polls(usage_driver):
+    from hangar import metrics
+    metrics.sample_all({"fake"})
+    metrics.sample_all({"fake"})
+    assert usage_driver.calls == 1
+
+
+def test_sample_all_survives_a_broken_driver(monkeypatch):
+    from hangar import metrics
+
+    class Broken:
+        def usage_all(self):
+            raise RuntimeError("se cayó")
+
+    monkeypatch.setattr(metrics, "DRIVERS", {"roto": Broken()})
+    monkeypatch.setattr(metrics, "_all_cache", (0.0, {}))
+    assert metrics.sample_all({"roto", "no-existe"}) == {}
+
+
+def test_base_usage_all_skips_stopped_and_failing_machines():
+    from hangar.drivers.base import Driver, Machine
+
+    class Three(Driver):
+        def list(self):
+            return [Machine("x", "on", "on", "running"), Machine("x", "off", "off", "stopped"),
+                    Machine("x", "bad", "bad", "running")]
+
+        def usage(self, machine_id):
+            if machine_id == "bad":
+                raise DriverError("ya no está")
+            return Usage(state="running", cpu_time=1.0)
+
+    assert list(Three().usage_all()) == ["on"]
+
+
+def test_lxc_usage_reads_the_cgroup(tmp_path, monkeypatch):
+    from hangar.drivers import lxc
+    box = tmp_path / "lxc.payload.web"
+    box.mkdir()
+    (box / "memory.current").write_text("1000000\n")
+    (box / "memory.max").write_text("max\n")
+    (box / "memory.stat").write_text("anon 5\ninactive_file 400000\n")
+    (box / "cpu.stat").write_text("usage_usec 2500000\nuser_usec 1\n")
+    monkeypatch.setattr(lxc, "CGROUP_ROOT", tmp_path)
+
+    usage = lxc._cgroup_usage("web")
+    assert (usage.cpu_time, usage.mem_used, usage.mem_limit) == (2.5, 600000, 0)
+    assert lxc._cgroup_usage("no-existe") is None
+    assert list(lxc.LxcDriver().usage_all()) == ["web"]
+
+    (box / "memory.max").write_text("2000000\n")
+    assert lxc.LxcDriver().usage("web").mem_limit == 2000000
+
+
+def test_api_status_includes_usage(client, monkeypatch):
+    machines = [Machine("kvm", "a", "a", "running")]
+    monkeypatch.setattr(main, "list_all", lambda: (machines, {}))
+    seen = []
+    monkeypatch.setattr(main.metrics, "sample_all",
+                        lambda kinds: seen.append(set(kinds)) or {"kvm/a": {"cpu": 1.5, "mem": 1, "limit": 0}})
+    data = client.get("/api/status").json()
+    assert data["usage"] == {"kvm/a": {"cpu": 1.5, "mem": 1, "limit": 0}}
+    assert seen == [{"kvm"}]
+
+
+def test_summary_shows_overview_and_folds_technical_details(client, fake):
+    page = client.get("/m/fake/vm-1").text
+    assert 'class="overview"' in page
+    assert "Detalles técnicos" in page
+    assert 'class="card tech"' in page
+
+
+def test_summary_survives_failing_overview_sources(client, fake, monkeypatch):
+    def boom(machine_id):
+        raise RuntimeError("libvirt se ha ido")
+
+    monkeypatch.setattr(fake, "interfaces", boom, raising=False)
+    monkeypatch.setattr(fake, "snapshots", boom, raising=False)
+    response = client.get("/m/fake/vm-1")
+    assert response.status_code == 200
+    assert "No está conectada a ninguna red" in response.text
+
+
+def test_success_message_is_marked_as_toast_but_errors_stay(client, fake):
+    page = client.get("/m/fake/vm-1?msg=Guardado&error=Mal").text
+    assert '<div class="alert ok" data-toast>' in page
+    assert '<div class="alert error">' in page
+
+
+@pytest.mark.parametrize("kind", ["kvm", "lxc", "docker"])
+def test_create_form_groups_every_field_once(client, kind, monkeypatch):
+    try:
+        expected = [f.key for f in main.DRIVERS[kind].create_fields()]
+    except DriverError:
+        pytest.skip("sin acceso a esa tecnología en este equipo")
+    page = client.get(f"/new/{kind}").text
+    assert "form-block" in page
+    for key in expected:
+        assert page.count(f'data-field="{key}"') == 1, key

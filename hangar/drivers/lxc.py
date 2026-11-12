@@ -49,6 +49,33 @@ def _memory_mib(value: str) -> int:
 STATES = {"RUNNING": "running", "STOPPED": "stopped", "FROZEN": "paused"}
 
 
+CGROUP_ROOT = Path("/sys/fs/cgroup")
+CGROUP_PREFIX = "lxc.payload."
+
+
+def _cgroup_usage(name: str) -> Usage | None:
+    """Consumo de un contenedor encendido leído de su cgroup (v2), que cualquier
+    usuario puede leer. lxc-info no siempre lo da. None si no está o no es v2."""
+    base = CGROUP_ROOT / f"{CGROUP_PREFIX}{name}"
+    try:
+        used = int((base / "memory.current").read_text())
+        cpu_usec = 0
+        for line in (base / "cpu.stat").read_text().splitlines():
+            if line.startswith("usage_usec "):
+                cpu_usec = int(line.split()[1])
+                break
+        limit_text = (base / "memory.max").read_text().strip()
+        limit = int(limit_text) if limit_text.isdigit() else 0
+        # Como «docker stats»: sin la caché de ficheros, que el kernel suelta si hace falta
+        for line in (base / "memory.stat").read_text().splitlines():
+            if line.startswith("inactive_file "):
+                used -= int(line.split()[1])
+                break
+    except (OSError, ValueError, IndexError):
+        return None
+    return Usage(state="running", cpu_time=cpu_usec / 1e6, mem_used=max(used, 0), mem_limit=limit)
+
+
 def _parse_seconds(value: str) -> float:
     """'1.23s' o '1.23 seconds' → 1.23."""
     m = re.search(r"([\d.]+)", value or "")
@@ -135,7 +162,23 @@ class LxcDriver(Driver):
         return machines[0]
 
     def usage(self, machine_id: str) -> Usage:
-        m = self.get(machine_id)
+        live = _cgroup_usage(machine_id)
+        if live is not None:              # sin pasar por el ayudante: es instantáneo
+            return live
+        return self._usage_of(self.get(machine_id))
+
+    def usage_all(self) -> dict[str, Usage]:
+        # Cada contenedor encendido tiene su cgroup: se leen sin sudo ni lxc-info
+        names = [p.name[len(CGROUP_PREFIX):] for p in CGROUP_ROOT.glob(CGROUP_PREFIX + "*")]
+        if names:
+            found = {name: _cgroup_usage(name) for name in names}
+            return {name: usage for name, usage in found.items() if usage is not None}
+        # cgroup v1 u otra disposición: un solo volcado del ayudante para todos
+        return {m.id: self._usage_of(m) for m in self._parse_dump(self._run("dump"))
+                if m.state == "running"}
+
+    @staticmethod
+    def _usage_of(m: Machine) -> Usage:
         if m.state != "running":
             return Usage(state=m.state)
         resources = dict(m.sections.get("Recursos", []))
@@ -184,6 +227,13 @@ class LxcDriver(Driver):
             ("Uso de CPU", info.get("CPU use", ["-"])[0]),
             ("Uso de memoria", info.get("Memory use", ["-"])[0]),
         ]
+        if m.state == "running" and "CPU use" not in info:
+            live = _cgroup_usage(m.id)        # lxc-info no siempre lo da
+            if live is not None:
+                m.sections["Recursos"][2:] = [
+                    ("Uso de CPU", f"{live.cpu_time:.2f} s"),
+                    ("Uso de memoria", f"{live.mem_used / 2**20:.1f} MiB"),
+                ]
         m.sections["Almacenamiento"] = [("rootfs", c("lxc.rootfs.path"))] + [
             ("montaje", v) for v in cfg.get("lxc.mount.entry", [])
         ]

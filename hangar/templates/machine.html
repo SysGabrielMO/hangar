@@ -6,7 +6,7 @@
 {% endblock %}
 {# Mensaje de la última acción. En Ajustes sale dentro de la sección afectada. #}
 {% macro flash() %}
-{% if msg %}<div class="alert ok">{{ icon("check") }}<span>{{ msg }}</span></div>{% endif %}
+{% if msg %}<div class="alert ok" data-toast>{{ icon("check") }}<span>{{ msg }}</span></div>{% endif %}
 {% if error %}<div class="alert error">{{ icon("alert") }}<span>{{ error }}</span></div>{% endif %}
 {% endmacro %}
 {% block content %}
@@ -103,18 +103,139 @@
 </nav>
 
 {% if tab == "info" %}
-<div class="grid">
-  {% for title, rows in m.sections.items() if rows %}
-  <section class="card">
-    <h2>{{ icon(section_icons.get(title, "list")) }}{{ title }}</h2>
-    <dl>
-      {% for label, value in rows %}
-      <dt>{{ label }}</dt><dd class="{{ 'mono' if '/' in value or ':' in value }}">{{ value }}</dd>
+{% set ov = overview %}
+<div class="overview">
+  <section class="card ov-card">
+    <h2>{{ icon("network") }}Red <a class="card-link" href="{{ base_url }}?tab=network">Gestionar</a></h2>
+    {% if ov.ifaces %}
+    <ul class="ov-list">
+      {% for i in ov.ifaces %}
+      <li>
+        <div class="ov-main">
+          <a class="ov-name" href="/networks" title="Ver las redes">{{ i.network or "sin red" }}</a>
+          {% if i.mac %}<span class="muted small mono">{{ i.mac }}</span>{% endif %}
+        </div>
+        <div class="ov-side">
+          {% for ip in i.ips %}
+          <button class="copy" type="button" data-copy="{{ ip.split('/')[0] }}" title="Copiar la IP">{{ ip }}{{ icon("copy") }}</button>
+          {% else %}
+          {% if i.defined_ip %}<span class="mono small" title="IP configurada; la máquina no la tiene ahora mismo">{{ i.defined_ip }}</span>
+          {% else %}<span class="muted small">{{ "sin IP todavía" if m.state == "running" else "sin IP (apagada)" }}</span>{% endif %}
+          {% endfor %}
+        </div>
+      </li>
       {% endfor %}
-    </dl>
+    </ul>
+    {% else %}
+    <div class="empty-state compact">
+      {{ icon("network") }}<p>No está conectada a ninguna red.</p>
+      <a class="btn small" href="{{ base_url }}?tab=network">{{ icon("plus") }} Conectar a una red</a>
+    </div>
+    {% endif %}
   </section>
-  {% endfor %}
+
+  <section class="card ov-card">
+    <h2>{{ icon("activity") }}Consumo {% if m.state == "running" %}<a class="card-link" href="{{ base_url }}?tab=metrics">Ver gráficas</a>{% endif %}</h2>
+    {% if m.state == "running" %}
+    <div class="ov-usage" data-overview-usage="/api/metrics/{{ m.kind }}/{{ m.id | urlencode }}">
+      {% set u = ov.usage %}
+      <div class="ov-meter">
+        <div class="ov-meter-head"><span>CPU</span>
+          <strong data-use="cpu">{% if u and u.cpu_pct is not none %}{{ "%.1f" | format(u.cpu_pct) }} %{% else %}Midiendo…{% endif %}</strong></div>
+        <div class="meter"><span data-bar="cpu" style="width: {{ (u.cpu_pct or 0) if u else 0 }}%"></span></div>
+        <span class="muted small">de toda la CPU del equipo</span>
+      </div>
+      <div class="ov-meter">
+        <div class="ov-meter-head"><span>RAM</span>
+          <strong data-use="mem">{% if u %}{{ u.mem_used | human }}{% else %}…{% endif %}</strong></div>
+        <div class="meter"><span data-bar="mem" style="width: {{ (u.mem_pct or 0) if u else 0 }}%"></span></div>
+        <span class="muted small" data-use="mem-note">{% if u and u.mem_limit %}de {{ u.mem_limit | human }}{% else %}sin límite de memoria{% endif %}</span>
+      </div>
+    </div>
+    {% else %}
+    <div class="empty-state compact">
+      {{ icon("power") }}<p>{{ "Está pausada" if m.state == "paused" else "Está apagada" }}: no consume nada.</p>
+      <form method="post" action="{{ base_url }}/start">
+        <button class="btn small">{{ icon("play") }} {{ "Reanudar" if m.state == "paused" else "Arrancar" }}</button>
+      </form>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if m.kind == "kvm" %}
+  <section class="card ov-card">
+    <h2>{{ icon("disk") }}Discos <a class="card-link" href="{{ base_url }}?tab=disks">Gestionar</a></h2>
+    {% if ov.disks %}
+    <ul class="ov-list">
+      {% for d in ov.disks %}
+      <li>
+        <div class="ov-main">
+          <span class="ov-name">{{ d.target }}</span>
+          <span class="muted small mono" title="{{ d.path }}">{{ d.path.rsplit("/", 1)[-1] }}</span>
+        </div>
+        <div class="ov-side"><strong>{{ (d.size | human) if d.size else "—" }}</strong>
+          {% if d.format %}<span class="muted small">{{ d.format }}</span>{% endif %}</div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-state compact">{{ icon("disk") }}<p>No tiene discos.</p></div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if ov.snap_count is not none %}
+  <section class="card ov-card">
+    <h2>{{ icon("camera") }}Snapshots <span class="n">{{ ov.snap_count }}</span>
+      <a class="card-link" href="{{ base_url }}?tab=snapshots">{{ "Ver todos" if ov.snap_count else "Crear" }}</a></h2>
+    {% if ov.last_snap %}
+    <ul class="ov-list">
+      <li>
+        <div class="ov-main">
+          <span class="ov-name">{{ ov.last_snap.name }}</span>
+          <span class="muted small">{{ ov.last_snap.description or "el más reciente" }}</span>
+        </div>
+        <div class="ov-side"><span class="small nowrap">{{ ov.last_snap.created }}</span></div>
+      </li>
+    </ul>
+    {% else %}
+    <div class="empty-state compact">
+      {{ icon("camera") }}<p>Sin snapshots: no hay punto al que volver si algo sale mal.</p>
+      <a class="btn small" href="{{ base_url }}?tab=snapshots">{{ icon("plus") }} Hacer el primero</a>
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <section class="card ov-card ov-notes">
+    <h2>{{ icon("note") }}Notas <a class="card-link" href="{{ base_url }}?tab=notes">{{ "Editar" if meta.notes else "Escribir" }}</a></h2>
+    {% if meta.notes %}
+    <div class="prose ov-notes-body">{{ meta.notes | markdown }}</div>
+    {% else %}
+    <div class="empty-state compact">
+      {{ icon("note") }}<p>Apunta aquí cómo está montada, usuarios de prueba o lo que te pidan en clase.</p>
+      <a class="btn small" href="{{ base_url }}?tab=notes">{{ icon("plus") }} Añadir notas</a>
+    </div>
+    {% endif %}
+  </section>
 </div>
+
+<details class="card tech">
+  <summary>{{ icon("list") }}Detalles técnicos
+    <span class="muted small">UUID, arquitectura, configuración completa…</span>{{ icon("chevron-down", "chev") }}</summary>
+  <div class="grid tech-grid">
+    {% for title, rows in m.sections.items() if rows %}
+    <section>
+      <h3>{{ icon(section_icons.get(title, "list")) }}{{ title }}</h3>
+      <dl>
+        {% for label, value in rows %}
+        <dt>{{ label }}</dt><dd class="{{ 'mono' if '/' in value or ':' in value }}">{{ value }}</dd>
+        {% endfor %}
+      </dl>
+    </section>
+    {% endfor %}
+  </div>
+</details>
 
 {% elif tab == "metrics" %}
 {% if tab_error %}
@@ -144,9 +265,13 @@
   <script type="application/json" id="metric-history">{{ usage.history | tojson }}</script>
 </section>
 {% else %}
-<div class="card empty">
-  <p>La máquina está {{ "pausada" if m.state == "paused" else "apagada" }}. Arráncala para ver su consumo.</p>
-</div>
+<div class="card"><div class="empty-state">
+  {{ icon("activity") }}
+  <p><strong>La máquina está {{ "pausada" if m.state == "paused" else "apagada" }}</strong>Arráncala para ver su consumo en vivo.</p>
+  <form method="post" action="{{ base_url }}/start">
+    <button class="btn small primary">{{ icon("play") }} {{ "Reanudar" if m.state == "paused" else "Arrancar" }}</button>
+  </form>
+</div></div>
 {% endif %}
 
 {% elif tab == "network" %}
@@ -216,7 +341,7 @@
     {% endif %}
   </div>
   {% else %}
-  <p class="muted">Sin interfaces de red.</p>
+  <div class="empty-state">{{ icon("network") }}<p><strong>Sin interfaces de red</strong>Conéctala a una red con el formulario de abajo.</p></div>
   {% endfor %}
 </section>
 
@@ -255,7 +380,7 @@
   </table>
   </div>
   {% else %}
-  <p class="muted">No hay discos de datos.</p>
+  <div class="empty-state">{{ icon("disk") }}<p><strong>No hay discos</strong>Añade uno con el formulario de abajo.</p></div>
   {% endif %}
   <p class="muted small">Para ampliar un disco que ya existe, ve a <a href="{{ base_url }}?tab=settings">Ajustes</a>.</p>
 </section>
@@ -313,7 +438,8 @@
   </table>
   </div>
   {% else %}
-  <p class="muted">Todavía no hay snapshots. Haz uno antes de un cambio arriesgado para poder volver atrás.</p>
+  <div class="empty-state">{{ icon("camera") }}<p><strong>Todavía no hay snapshots</strong>Haz uno antes de un cambio arriesgado para poder volver atrás.</p>
+    <a class="btn small" href="#f-snap-desc">{{ icon("plus") }} Hacer el primero</a></div>
   {% endif %}
 </section>
 
@@ -347,6 +473,9 @@
 {% else %}
 <section class="card">
   <h2>{{ icon("users") }}Usuarios <span class="n">{{ users | length }}</span></h2>
+  {% if not users %}
+  <div class="empty-state">{{ icon("users") }}<p><strong>No se han encontrado usuarios</strong>No se pudo leer /etc/passwd de esta máquina.</p></div>
+  {% else %}
   <div class="table-wrap flat">
   <table class="users">
     <thead><tr><th>Usuario</th><th>UID</th><th>Home</th><th>Shell</th></tr></thead>
@@ -360,6 +489,7 @@
     </tbody>
   </table>
   </div>
+  {% endif %}
 </section>
 {% endif %}
 
@@ -390,7 +520,7 @@
   <section class="card">
     <h2>Vista previa</h2>
     <div class="prose">
-      {% if meta.notes %}{{ meta.notes | markdown }}{% else %}<p class="muted">Aún no hay notas. Apunta aquí cómo está montada la máquina: servicios, puertos, usuarios del laboratorio…</p>{% endif %}
+      {% if meta.notes %}{{ meta.notes | markdown }}{% else %}<div class="empty-state">{{ icon("note") }}<p><strong>Aún no hay notas</strong>Apunta aquí cómo está montada la máquina: servicios, puertos, usuarios del laboratorio…</p></div>{% endif %}
     </div>
   </section>
 </div>
