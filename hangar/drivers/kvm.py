@@ -470,7 +470,13 @@ class KvmDriver(Driver):
         except libvirt.libvirtError:
             pass
         # libvirt devuelve memoryStats y dom.info() en KiB, no en bytes.
-        mem_kib = stats.get("rss") or stats.get("actual") or info[2]
+        # Con el globo (virtio-balloon) el invitado dice cuánta le queda libre: eso es
+        # lo que usa de verdad. Sin él solo se sabe lo que ocupa el proceso de QEMU,
+        # que incluye su propia sobrecarga y puede pasar de la RAM de la VM.
+        if stats.get("available") and stats.get("usable") is not None:
+            mem_kib = stats["available"] - stats["usable"]
+        else:
+            mem_kib = min(stats.get("rss") or stats.get("actual") or info[2], info[1])
         return Usage(state=state, cpu_time=info[4] / 1e9,
                      mem_used=int(mem_kib) * 1024, mem_limit=info[1] * 1024)
 
@@ -1640,6 +1646,38 @@ class KvmDriver(Driver):
                         shared[p].append(other.name())
         return mine, shared
 
+    @staticmethod
+    def _cdroms(dom) -> tuple[list[str], list[str]]:
+        """ISOs conectadas a la VM: (las de cloud-init que generó Hangar, el resto).
+        Las primeras se llaman «<vm>-seed.iso» y solo sirven para esa VM."""
+        root = ET.fromstring(dom.XMLDesc(XML_FLAGS))
+        paths = [s.get("file") for s in root.findall("devices/disk[@device='cdrom']/source")
+                 if s.get("file")]
+        seed = re.compile(rf"^{re.escape(dom.name())}-seed(-\d+)?\.iso$")
+        seeds = [p for p in paths if seed.match(p.rsplit("/", 1)[-1])]
+        return seeds, [p for p in paths if p not in seeds]
+
+    @staticmethod
+    def _drop_reservations(conn, macs: set[str]) -> list[str]:
+        """Quita de las redes las reservas DHCP de esas MAC (al borrar la VM): si se
+        quedan, esa IP no se puede volver a dar a otra máquina. Devuelve las IPs liberadas."""
+        freed = []
+        section = libvirt.VIR_NETWORK_SECTION_IP_DHCP_HOST
+        for net in conn.listAllNetworks():
+            try:
+                hosts = ET.fromstring(net.XMLDesc()).findall("ip/dhcp/host")
+                flags = libvirt.VIR_NETWORK_UPDATE_AFFECT_CONFIG
+                if net.isActive():
+                    flags |= libvirt.VIR_NETWORK_UPDATE_AFFECT_LIVE
+                for host in hosts:
+                    if (host.get("mac") or "").lower() in macs:
+                        net.update(libvirt.VIR_NETWORK_UPDATE_COMMAND_DELETE, section, -1,
+                                   ET.tostring(host, encoding="unicode"), flags)
+                        freed.append(f"{host.get('ip')} en {net.name()}")
+            except libvirt.libvirtError:
+                continue          # una reserva que no se puede quitar no impide el borrado
+        return freed
+
     def delete_plan(self, machine_id: str) -> DeletePlan:
         conn = self._conn()
         try:
@@ -1655,9 +1693,10 @@ class KvmDriver(Driver):
                     plan.keep.append(f"{path}: lo usa también {', '.join(shared[path])}")
                 else:
                     plan.delete.append(f"{path} (si marcas «Borrar discos»)")
-            root = ET.fromstring(dom.XMLDesc(XML_FLAGS))
-            plan.keep += [f"{s.get('file')} (ISO/CD-ROM)" for s in
-                          root.findall("devices/disk[@device='cdrom']/source") if s.get("file")]
+            seeds, isos = self._cdroms(dom)
+            plan.delete += [f"{path} (ISO de cloud-init de esta VM, si marcas «Borrar discos»)"
+                            for path in seeds]
+            plan.keep += [f"{path} (ISO/CD-ROM)" for path in isos]
             plan.options.append(Field("delete_disks", "Borrar también los discos", "1",
                                       "checkbox"))
             return plan
@@ -1671,13 +1710,18 @@ class KvmDriver(Driver):
             if dom.isActive():
                 raise DriverError("Apaga la VM antes de borrarla.")
             mine, shared = self._disk_owners(conn, dom)
+            seeds, _ = self._cdroms(dom)
             name = dom.name()
+            macs = {(mac.get("address") or "").lower() for mac in
+                    ET.fromstring(dom.XMLDesc(XML_FLAGS)).findall("devices/interface/mac")}
             flags = (libvirt.VIR_DOMAIN_UNDEFINE_NVRAM
                      | libvirt.VIR_DOMAIN_UNDEFINE_MANAGED_SAVE
                      | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
                      | libvirt.VIR_DOMAIN_UNDEFINE_CHECKPOINTS_METADATA)
             dom.undefineFlags(flags)
             notes = [f"VM «{name}» borrada."]
+            if dropped := self._drop_reservations(conn, macs):
+                notes.append("Reserva DHCP liberada: " + ", ".join(dropped) + ".")
 
             if "delete_disks" in values:
                 for path in mine:
@@ -1690,6 +1734,12 @@ class KvmDriver(Driver):
                     except libvirt.libvirtError:
                         notes.append(f"No se pudo borrar {path}: no está en ningún pool de "
                                      "libvirt, bórralo a mano si ya no lo necesitas.")
+                for path in seeds:
+                    try:
+                        conn.storageVolLookupByPath(path).delete(0)
+                        notes.append(f"ISO de cloud-init {path} borrada.")
+                    except libvirt.libvirtError:
+                        notes.append(f"No se pudo borrar {path}: bórrala a mano.")
             return notes
         except libvirt.libvirtError as e:
             raise DriverError(str(e)) from e

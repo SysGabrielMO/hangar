@@ -42,7 +42,12 @@
       <span class="fact">{{ icon("cpu") }}{% if m.vcpus %}<strong>{{ "%g" | format(m.vcpus) }}</strong> vCPU{% else %}CPU sin límite{% endif %}</span>
       <span class="fact">{{ icon("memory") }}{% if m.memory_mib %}<strong>{{ m.memory }}</strong>{% else %}RAM sin límite{% endif %}</span>
       {% for ip in m.ips %}
-      <button class="copy" type="button" data-copy="{{ ip }}" title="Copiar la IP">{{ ip }}{{ icon("copy") }}</button>
+      {% if m.state == "running" %}
+      <button class="copy" type="button" data-copy="{{ ip.split('/')[0] }}" title="Copiar la IP">{{ ip }}{{ icon("copy") }}</button>
+      {% else %}
+      <button class="copy stale" type="button" data-copy="{{ ip.split('/')[0] }}"
+              title="Última IP conocida: ahora no está encendida. Pulsa para copiarla."><span class="stale-label">última</span>{{ ip }}{{ icon("copy") }}</button>
+      {% endif %}
       {% endfor %}
     </div>
     {% if meta.description %}<p class="lead">{{ meta.description }}</p>{% endif %}

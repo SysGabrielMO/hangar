@@ -348,6 +348,19 @@ td.right, th.right { text-align: right; }
 
 /* Anchos fijos: las columnas quedan alineadas de un grupo a otro */
 .machines { table-layout: fixed; min-width: 860px; }
+.machines th.c-sel { width: 38px; }
+.machines .c-sel { padding-right: 0; text-align: center; }
+.machines .c-sel input { width: 15px; height: 15px; margin: 0; vertical-align: middle; cursor: pointer; accent-color: var(--accent); }
+.machines tbody .c-sel input { opacity: .35; transition: opacity .1s; }
+.machines tbody tr:hover .c-sel input, .machines tbody .c-sel input:checked, .machines tbody .c-sel input:focus-visible,
+body.selecting .machines tbody .c-sel input { opacity: 1; }
+.machines tbody tr.selected { background: var(--accent-soft); }
+/* Barra de acciones en lote */
+.bulk-bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 55; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 24px); padding: 9px 10px 9px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lg); animation: toast-in .16s ease-out; }
+.bulk-bar[hidden] { display: none; }
+.bulk-bar strong { margin-right: 6px; font-size: 13.5px; white-space: nowrap; }
+.bulk-bar select { width: auto; padding-top: 4px; padding-bottom: 4px; font-size: 13px; }
+.bulk-bar.busy { opacity: .6; pointer-events: none; }
 .machines th.c-kind { width: 94px; }
 .machines th.c-res { width: 168px; }
 .machines th.c-use { width: 150px; }
@@ -363,6 +376,11 @@ td.right, th.right { text-align: right; }
 @media (max-width: 1180px) { .machines .c-res { display: none; } .machines { min-width: 700px; } }
 .machines td { overflow: hidden; text-overflow: ellipsis; }
 .machines td.js-ips { white-space: normal; overflow-wrap: anywhere; }
+/* IP de una máquina apagada: es la última que se le vio */
+.machines td.js-ips.stale { color: var(--muted); opacity: .75; }
+.machines td.js-ips.stale::before { content: "última · "; font-family: system-ui, sans-serif; font-size: 11.5px; }
+.copy.stale { background: none; border: 1px dashed var(--border); color: var(--muted); }
+.stale-label { font-family: system-ui, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; opacity: .8; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .machines tbody tr { cursor: pointer; transition: background .1s; }
 .machines tbody tr:hover { background: var(--row-hover); }
@@ -558,6 +576,8 @@ body.console-resizing, body.console-resizing * { cursor: ns-resize !important; u
   /* En el móvil la tabla se queda con lo esencial: nombre, IP y acciones */
   .machines { min-width: 0; }
   .machines .c-kind, .machines .c-res, .machines .c-mod, .machines .c-use { display: none; }
+  .machines th.c-sel { width: 32px; }
+  .machines tbody .c-sel input { opacity: 1; }
   .machines th.c-ip { width: 132px; }
   .machines th, .machines td { padding: 10px; }
 }

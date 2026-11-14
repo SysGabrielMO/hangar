@@ -328,7 +328,13 @@ async function refreshStatus() {
         dot.title = STATE_ES[m.state] || "Estado desconocido";
       }
       const ips = row.querySelector(".js-ips");
-      if (ips) ips.textContent = m.ips.length ? m.ips.join(", ") : "—";
+      if (ips) {
+        ips.textContent = m.ips.length ? m.ips.join(", ") : "—";
+        // Apagada: la IP es la última que se le vio, no una que responda ahora
+        const stale = m.ips.length > 0 && m.state !== "running";
+        ips.classList.toggle("stale", stale);
+        ips.title = stale ? "Última IP conocida: ahora no está encendida" : "";
+      }
       updateUsage(row.querySelector(".js-usage"), m, (data.usage || {})[row.dataset.key], data.host);
       const cell = row.querySelector(".js-power");
       if (cell && row.dataset.busy !== "1" && cell.dataset.state !== m.state) {
@@ -466,6 +472,108 @@ if (document.querySelector("tr[data-key]")) {
   };
   setInterval(check, 3000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
+})();
+
+// Portada: marcar varias máquinas y arrancarlas, apagarlas o moverlas de módulo de golpe
+(() => {
+  const bar = document.getElementById("bulk-bar");
+  if (!bar) return;
+  const count = document.getElementById("bulk-count");
+  const moduleSelect = document.getElementById("bulk-module");
+  const boxes = () => [...document.querySelectorAll(".js-select")];
+  const chosen = () => boxes().filter((box) => box.checked);
+
+  const sync = () => {
+    const picked = chosen();
+    boxes().forEach((box) => box.closest("tr").classList.toggle("selected", box.checked));
+    document.querySelectorAll(".js-select-all").forEach((all) => {
+      const own = [...all.closest("table").querySelectorAll(".js-select")];
+      const on = own.filter((box) => box.checked).length;
+      all.checked = on > 0 && on === own.length;
+      all.indeterminate = on > 0 && on < own.length;
+    });
+    count.textContent = `${picked.length} ${picked.length === 1 ? "seleccionada" : "seleccionadas"}`;
+    bar.hidden = picked.length === 0;
+    document.body.classList.toggle("selecting", picked.length > 0);
+  };
+
+  let last = null;                // con Mayús se marca el tramo entre dos casillas
+  document.addEventListener("click", (event) => {
+    const box = event.target.closest(".js-select");
+    if (!box) return;
+    if (event.shiftKey && last && last !== box) {
+      const all = boxes();
+      const [from, to] = [all.indexOf(last), all.indexOf(box)].sort((a, b) => a - b);
+      all.slice(from, to + 1).forEach((item) => { item.checked = box.checked; });
+    }
+    last = box;
+    sync();
+  });
+  document.addEventListener("change", (event) => {
+    const all = event.target.closest(".js-select-all");
+    if (!all) return;
+    all.closest("table").querySelectorAll(".js-select").forEach((box) => { box.checked = all.checked; });
+    sync();
+  });
+  const clear = () => { boxes().forEach((box) => { box.checked = false; }); sync(); };
+  document.getElementById("bulk-clear").addEventListener("click", clear);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !bar.hidden && !document.getElementById("confirm-dialog")?.open) clear();
+  });
+
+  const send = async (action, module = "") => {
+    const keys = chosen().map((box) => box.value);
+    if (!keys.length) return;
+    bar.classList.add("busy");
+    try {
+      const response = await fetch("/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ action, keys, module }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "No se pudo completar la acción.");
+      if (action === "module") {
+        location.reload();          // las máquinas cambian de grupo
+        return;
+      }
+      const verb = action === "start" ? "Arrancando" : "Apagando";
+      (data.errors || []).forEach((text) => toast(text, true));
+      const ok = data.done - (data.errors || []).length;
+      if (ok > 0) toast(`${verb} ${ok} ${ok === 1 ? "máquina" : "máquinas"}…`);
+      else if (!data.errors?.length) {
+        toast(action === "start" ? "Ya estaban todas encendidas." : "Ya estaban todas apagadas.");
+      }
+      clear();
+      [700, 2000, 4000, 8000, 12000, 20000, 30000].forEach((ms) => setTimeout(refreshStatus, ms));
+    } catch (error) {
+      toast(error.message || "No se pudo completar la acción.", true);
+    } finally {
+      bar.classList.remove("busy");
+    }
+  };
+
+  bar.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-bulk]");
+    if (!button) return;
+    const action = button.dataset.bulk;
+    const n = chosen().length;
+    if (action === "stop") {
+      const confirmed = await askConfirm({
+        title: `Apagar ${n} ${n === 1 ? "máquina" : "máquinas"}`,
+        text: "Se les pide que se apaguen de forma ordenada. Las que ya estén apagadas no se tocan.",
+        label: "Apagar", danger: true,
+      });
+      if (!confirmed) return;
+    }
+    send(action);
+  });
+  moduleSelect.addEventListener("change", () => {
+    const value = moduleSelect.value;
+    moduleSelect.selectedIndex = 0;
+    send("module", value === "-" ? "" : value);
+  });
+  sync();                          // el navegador puede recordar casillas al volver atrás
 })();
 
 // Grupos de la portada plegables; se recuerda cuáles están cerrados

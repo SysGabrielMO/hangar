@@ -134,12 +134,13 @@
   <div class="table-wrap">
   <table class="machines">
     <thead>
-      <tr><th>Máquina</th><th class="c-kind">Tipo</th><th class="c-res">Recursos</th><th class="c-use" title="Consumo en vivo: CPU sobre el total del equipo y RAM sobre su límite (o la del equipo si no tiene)">Uso ahora</th><th class="c-ip">IP</th>
+      <tr><th class="c-sel"><input type="checkbox" class="js-select-all" aria-label="Seleccionar todas las de {{ key or 'Sin módulo' }}" title="Seleccionar todas"></th><th>Máquina</th><th class="c-kind">Tipo</th><th class="c-res">Recursos</th><th class="c-use" title="Consumo en vivo: CPU sobre el total del equipo y RAM sobre su límite (o la del equipo si no tiene)">Uso ahora</th><th class="c-ip">IP</th>
         {%- if not key %}<th class="c-mod">Módulo</th>{% endif %}<th class="c-act"><span class="sr-only">Acciones</span></th></tr>
     </thead>
     <tbody>
     {% for m, meta in items %}
       <tr data-href="/m/{{ m.kind }}/{{ m.id | urlencode }}" data-key="{{ m.kind }}/{{ m.id }}">
+        <td class="c-sel"><input type="checkbox" class="js-select" value="{{ m.kind }}/{{ m.id }}" aria-label="Seleccionar {{ m.name }}"></td>
         <td class="name">
           <div class="m-name">
             <span class="dot {{ m.state }} js-dot" title="{{ state_es.get(m.state, 'Estado desconocido') }}"></span>
@@ -163,7 +164,8 @@
           <div class="use"><span class="use-l">RAM</span><div class="meter"><span style="width: 0"></span></div><span class="use-v">…</span></div>
           {%- else %}<span class="use-off">—</span>{% endif -%}
         </td>
-        <td class="mono js-ips">{{ m.ips | join(", ") or "—" }}</td>
+        {%- set stale = m.ips and m.state != "running" %}
+        <td class="mono js-ips {{ 'stale' if stale }}" {% if stale %}title="Última IP conocida: ahora no está encendida"{% endif %}>{{ m.ips | join(", ") or "—" }}</td>
         {% if not key %}
         <td class="c-mod">
           <form method="post" action="/m/{{ m.kind }}/{{ m.id | urlencode }}/module" class="module-pick">
@@ -195,4 +197,17 @@
   {% endif %}
 </div></div>
 {% endfor %}
+
+{# Barra de acciones en lote: aparece al marcar alguna máquina #}
+<div class="bulk-bar" id="bulk-bar" hidden role="region" aria-label="Acciones sobre las máquinas seleccionadas">
+  <strong id="bulk-count">0 seleccionadas</strong>
+  <button class="btn small" type="button" data-bulk="start">{{ icon("play") }} Arrancar</button>
+  <button class="btn small" type="button" data-bulk="stop">{{ icon("power") }} Apagar</button>
+  <select id="bulk-module" aria-label="Mover al módulo">
+    <option value="" disabled selected>Mover a módulo…</option>
+    {% for k in modules %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
+    <option value="-">Quitar el módulo</option>
+  </select>
+  <button class="btn small ghost icon-only" type="button" id="bulk-clear" title="Quitar la selección" aria-label="Quitar la selección">{{ icon("x") }}</button>
+</div>
 {% endblock %}

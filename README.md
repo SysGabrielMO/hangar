@@ -147,6 +147,15 @@ puede forzar desde el diálogo de confirmación).
 Los botones ▶/■ de cada fila arrancan o paran esa máquina sin abrir la ficha.
 El estado, las IPs y las cifras del host se refrescan solos cada 6 segundos.
 
+**Acciones en lote**: marca varias máquinas con la casilla de la izquierda (la
+de la cabecera marca el grupo entero; con Mayús se marca un tramo) y aparece
+una barra abajo para arrancarlas, apagarlas o moverlas de módulo de una vez.
+Solo se toca lo que hace falta: no se arranca lo encendido ni se apaga lo
+apagado. Borrar en lote no existe a propósito.
+
+La IP de una máquina apagada sale atenuada y con «última»: es la última que
+se le vio, no una que responda ahora.
+
 La columna **Uso ahora** enseña, en las máquinas encendidas, dos barritas con
 lo que consumen de verdad: la CPU sobre el total del equipo y la RAM sobre su
 límite (o sobre la RAM del equipo si no tiene). Se lee de una vez por
@@ -244,7 +253,8 @@ actualiza cada 3 s mientras la pestaña está abierta; el histórico vive en
 memoria y se pierde al reiniciar Hangar. La primera lectura de CPU tarda una
 muestra en estar lista y muestra «Midiendo…»; la RAM aparece desde el principio.
 
-- **KVM**: tiempo de CPU de libvirt y memoria RSS del proceso.
+- **KVM**: tiempo de CPU de libvirt y la memoria que el invitado usa de verdad
+  (globo virtio); sin globo, la del proceso de QEMU, sin pasar de la RAM de la VM.
 - **Docker**: `container.stats()` (descontando la caché de página).
 - **LXC**: el cgroup del contenedor (`/sys/fs/cgroup/lxc.payload.<nombre>`), sin
   pasar por el ayudante; si no existe (cgroup v1), `CPU use` y `Memory use` de

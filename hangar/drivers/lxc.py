@@ -212,6 +212,12 @@ class LxcDriver(Driver):
                     cpus=self._cpus(cfg), memory=self._memory_label(c("lxc.cgroup2.memory.max", "")),
                     memory_mib=mem_mib, vcpus=float(self._cpu_count(cfg)),
                     ips=info.get("IP", []), raw_config=config, raw_label="Fichero config")
+        # Con IP fija y además un cliente DHCP dentro tiene las dos: la fija va primero,
+        # que es la que se ha pedido y la que se enseña en la portada.
+        fixed = {value.split("/")[0] for key, values in cfg.items()
+                 if key.startswith("lxc.net.") and key.endswith(".ipv4.address")
+                 for value in values}
+        m.ips.sort(key=lambda ip: (ip not in fixed, ":" in ip))
 
         m.sections["General"] = [
             ("Nombre de host", c("lxc.uts.name")),

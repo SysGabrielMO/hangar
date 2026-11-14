@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
@@ -591,6 +592,75 @@ def run_power(driver, action: str, machine_id: str) -> None:
             return
         if state["error"]:
             raise DriverError(state["error"])
+
+
+BULK_LIMIT = 100
+BULK_WAIT = 1.5         # segundos que se espera a las acciones en lote antes de dejarlas de fondo
+
+
+@app.post("/bulk")
+async def bulk(request: Request):
+    """Una acción sobre varias máquinas a la vez, desde la portada.
+
+    Recibe JSON: {"action": "start" | "stop" | "module", "keys": ["tipo/id", …],
+    "module": "ASO"}. Arrancar y apagar van en paralelo y, como en la ficha, lo
+    que tarde sigue en segundo plano y avisa si acaba mal."""
+    try:
+        body = await request.json()
+        action, keys = body["action"], body["keys"]
+        module = str(body.get("module", ""))
+    except (ValueError, KeyError, TypeError) as e:
+        raise HTTPException(400, "Petición mal formada") from e
+    if action not in ("start", "stop", "module") or not isinstance(keys, list) \
+            or not keys or len(keys) > BULK_LIMIT \
+            or not all(isinstance(key, str) for key in keys):
+        raise HTTPException(400, "Petición mal formada")
+    if action == "module" and module and module not in db.MODULES:
+        raise HTTPException(400, "Ese módulo no existe")
+
+    machines, _ = list_all()
+    known = {f"{m.kind}/{m.id}": m for m in machines}
+    targets = [known[key] for key in dict.fromkeys(keys) if key in known]
+    if not targets:
+        raise HTTPException(404, "Esas máquinas ya no existen")
+
+    if action == "module":
+        for m in targets:
+            db.set_module(m.kind, m.id, module)
+        return {"done": len(targets), "skipped": 0, "errors": [], "pending": 0}
+
+    # Solo las que tiene sentido tocar: no se arranca lo encendido ni se apaga lo apagado
+    todo = [m for m in targets if (m.state != "running") == (action == "start")]
+    lock = threading.Lock()
+    errors: list[str] = []
+    state = {"detached": False, "left": len(todo)}
+
+    def work(m):
+        error = None
+        try:
+            getattr(DRIVERS[m.kind], action)(m.id)
+        except DriverError as e:
+            error = str(e)
+        except Exception as e:  # noqa: BLE001 - que no muera el hilo en silencio
+            error = f"Error inesperado: {e!r}"
+        invalidate_list()
+        with lock:
+            state["left"] -= 1
+            if error and state["detached"]:
+                push_notice(f"No se pudo {POWER_LABELS[action]} {m.name}: {error}")
+            elif error:
+                errors.append(f"{m.name}: {error}")
+
+    threads = [threading.Thread(target=work, args=(m,), daemon=True) for m in todo]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + BULK_WAIT
+    for thread in threads:
+        thread.join(max(deadline - time.monotonic(), 0))
+    with lock:
+        state["detached"] = True
+        return {"done": len(todo), "skipped": len(targets) - len(todo),
+                "errors": list(errors), "pending": state["left"]}
 
 
 @app.post("/m/{kind}/{machine_id}/{action}")

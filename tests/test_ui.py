@@ -452,3 +452,155 @@ def test_create_form_groups_every_field_once(client, kind, monkeypatch):
     assert "form-block" in page
     for key in expected:
         assert page.count(f'data-field="{key}"') == 1, key
+
+
+# --- Acciones en lote, IP de las apagadas y memoria de las VM --------------
+
+class PowerDriver:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, machine_id):
+        self.calls.append(("start", machine_id))
+
+    def stop(self, machine_id):
+        self.calls.append(("stop", machine_id))
+        if machine_id == "rota":
+            raise DriverError("no responde")
+
+
+@pytest.fixture
+def bulk_env(monkeypatch):
+    driver = PowerDriver()
+    monkeypatch.setitem(DRIVERS, "fake", driver)
+    machines = [Machine("fake", "on", "on", "running"), Machine("fake", "off", "off", "stopped"),
+                Machine("fake", "rota", "rota", "running")]
+    monkeypatch.setattr(main, "list_all", lambda: (machines, {}))
+    return driver
+
+
+def test_bulk_start_only_touches_stopped_machines(client, bulk_env):
+    data = client.post("/bulk", json={"action": "start",
+                                      "keys": ["fake/on", "fake/off", "fake/off", "fake/nope"]}).json()
+    assert bulk_env.calls == [("start", "off")]
+    assert (data["done"], data["skipped"], data["errors"]) == (1, 1, [])
+
+
+def test_bulk_stop_reports_the_ones_that_fail(client, bulk_env):
+    data = client.post("/bulk", json={"action": "stop", "keys": ["fake/on", "fake/rota"]}).json()
+    assert sorted(bulk_env.calls) == [("stop", "on"), ("stop", "rota")]
+    assert data["errors"] == ["rota: no responde"]
+
+
+def test_bulk_module_moves_every_machine(client, bulk_env, monkeypatch):
+    moved = []
+    monkeypatch.setattr(db, "set_module", lambda kind, machine_id, module: moved.append((machine_id, module)))
+    response = client.post("/bulk", json={"action": "module", "keys": ["fake/on", "fake/off"],
+                                          "module": "ASO"})
+    assert response.json()["done"] == 2
+    assert moved == [("on", "ASO"), ("off", "ASO")]
+
+
+@pytest.mark.parametrize("body", [
+    {"action": "delete", "keys": ["fake/on"]},          # borrar en lote no existe, a propósito
+    {"action": "start", "keys": []},
+    {"action": "start", "keys": [1, 2]},
+    {"action": "start", "keys": "fake/on"},
+    {"action": "module", "keys": ["fake/on"], "module": "NO-EXISTE"},
+    {"keys": ["fake/on"]},
+    [],
+])
+def test_bulk_rejects_bad_requests(client, bulk_env, body):
+    assert client.post("/bulk", json=body).status_code == 400
+    assert bulk_env.calls == []
+
+
+def test_bulk_with_only_unknown_machines_is_404(client, bulk_env):
+    assert client.post("/bulk", json={"action": "stop", "keys": ["fake/nope"]}).status_code == 404
+
+
+def test_index_marks_ips_of_stopped_machines_as_last_known(client, monkeypatch):
+    machines = [Machine("kvm", "a", "encendida", "running", ips=["10.0.0.1"]),
+                Machine("kvm", "b", "apagada", "stopped", ips=["10.0.0.2"])]
+    monkeypatch.setattr(main, "list_all", lambda: (machines, {}))
+    monkeypatch.setattr(db, "all_meta", lambda: {})
+    page = client.get("/").text
+    assert page.count('class="mono js-ips stale"') == 1
+    assert page.count('class="js-select"') == 2
+    assert 'id="bulk-bar"' in page
+
+
+def test_kvm_memory_uses_guest_view_and_never_exceeds_the_vm():
+    import libvirt
+
+    class Dom:
+        def __init__(self, stats):
+            self.stats = stats
+
+        def info(self):
+            return [libvirt.VIR_DOMAIN_RUNNING, 786432, 786432, 1, 5_000_000_000]
+
+        def memoryStats(self):
+            return self.stats
+
+    # Con globo: disponible - utilizable (lo que el invitado usa de verdad)
+    with_balloon = KvmDriver._usage_of(Dom({"available": 733116, "usable": 550420, "rss": 826656}))
+    assert with_balloon.mem_used == (733116 - 550420) * 1024
+    # Sin globo: el proceso de QEMU ocupa más que la RAM de la VM; no se pasa del 100 %
+    without = KvmDriver._usage_of(Dom({"rss": 826656}))
+    assert without.mem_used == without.mem_limit == 786432 * 1024
+    assert without.cpu_time == 5.0
+
+
+def test_lxc_fixed_ip_goes_first():
+    from hangar.drivers.lxc import LxcDriver
+    dump = ("==> web\nName:           web\nState:          RUNNING\nIP:             10.0.3.234\n"
+            "IP:             10.0.3.77\n--- config\nlxc.net.0.type = veth\n"
+            "lxc.net.0.ipv4.address = 10.0.3.77/24\n")
+    assert LxcDriver()._parse_dump(dump)[0].ips == ["10.0.3.77", "10.0.3.234"]
+
+
+class FakeDom:
+    def __init__(self, name, cdroms):
+        self._name, self._cdroms = name, cdroms
+
+    def name(self):
+        return self._name
+
+    def XMLDesc(self, flags=0):
+        disks = "".join(f"<disk device='cdrom'><source file='{path}'/></disk>" for path in self._cdroms)
+        return f"<domain><devices>{disks}</devices></domain>"
+
+
+def test_kvm_delete_takes_its_own_cloud_init_iso_but_not_other_isos():
+    dom = FakeDom("web", ["/img/web-seed.iso", "/img/web-seed-2.iso", "/img/debian-13.iso",
+                          "/img/otra-web-seed.iso"])
+    seeds, isos = KvmDriver._cdroms(dom)
+    assert seeds == ["/img/web-seed.iso", "/img/web-seed-2.iso"]
+    assert isos == ["/img/debian-13.iso", "/img/otra-web-seed.iso"]
+
+
+def test_kvm_delete_frees_dhcp_reservations():
+    updates = []
+
+    class Net:
+        def name(self):
+            return "default"
+
+        def isActive(self):
+            return True
+
+        def XMLDesc(self):
+            return ("<network><ip address='10.0.0.1'><dhcp>"
+                    "<host mac='52:54:00:AA:BB:01' ip='10.0.0.5'/>"
+                    "<host mac='52:54:00:aa:bb:02' ip='10.0.0.6'/></dhcp></ip></network>")
+
+        def update(self, command, section, index, xml, flags):
+            updates.append(xml)
+
+    class Conn:
+        def listAllNetworks(self):
+            return [Net()]
+
+    assert KvmDriver._drop_reservations(Conn(), {"52:54:00:aa:bb:01"}) == ["10.0.0.5 en default"]
+    assert len(updates) == 1 and "10.0.0.5" in updates[0]
